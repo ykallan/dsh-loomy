@@ -62,8 +62,11 @@ declare const zh: {
   refreshModels: string;
   refreshing: string;
   selectAll: string;
+  selectInvert: string;
   selectionAll: string;
   selectionRestricted: string;
+  selectionNone: string;
+  selectionCount: string;
   modelVision: string;
   modelReasoning: string;
   modelTools: string;

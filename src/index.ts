@@ -27,7 +27,7 @@ import {
   loomyUsagePath,
 } from './accounts.ts'
 import { LoomyAccountPool, type PoolStrategy } from './account-pool.ts'
-import { LoomyCatalog } from './catalog.ts'
+import { LoomyCatalog, invertSelection as invertModelSelection, normalizeSelection, type Selection, type SelectionMode } from './catalog.ts'
 import { refreshCatalog } from './discovery.ts'
 import { LoomyUsageTracker } from './usage.ts'
 import { LoomyPointsTracker, fetchPoints, looksLikeQuotaExhausted, type PointsSnapshot } from './points.ts'
@@ -46,8 +46,14 @@ export { createLoomyShim, type LoomyShim, type ShimStats } from './shim.ts'
 export {
   LoomyCatalog,
   filterEnabledModels,
+  invertSelection,
+  isSelectionMode,
   mergeModelLists,
+  normalizeSelection,
+  resolveSelection,
   type LoomyModelInfo,
+  type Selection,
+  type SelectionMode,
 } from './catalog.ts'
 export {
   LoomyAccountStore,
@@ -84,8 +90,10 @@ export const LOOMY_SETTINGS_NS = 'loomy' as SettingsNamespace
 
 /** 插件配置。 */
 export interface Config {
-  /** 模型选择器里允许出现的模型 id（空 = 全部）。 */
+  /** 模型选择器里允许出现的模型 id（`custom` 模式时生效；空 = 全部）。 */
   enabledModels?: string[]
+  /** 模型勾选模式：`all` 全部 / `none` 一个都不给 / `custom` 只给勾选的。 */
+  modelSelectionMode?: SelectionMode
   /** 对话输入框下方的 `Provider Loomy · 模型 · 今日点数` 那一行。 */
   showDock?: boolean
   /** 侧边栏图标列里的 Loomy 入口。缺省关：图标列是全宿主共用资源。 */
@@ -122,7 +130,13 @@ function unwrapConfig(value: unknown): Config {
 
 export const Config: z<Config> = z.object({
   enabledModels: z.array(z.string())
-    .description('Model ids offered in the model pickers (empty means every model)')
+    .description('Model ids offered in the model pickers (only used in custom mode)')
+    .volatile(),
+  modelSelectionMode: z.union(['all', 'none', 'custom'])
+    // **故意不给 default**：老配置里只有 enabledModels，没有这个键。写死一个默认值会让
+    // 「曾经勾好的子集」在升级后被当成 all 而无声丢弃。缺省时由 enabledModels 推断
+    // （空 = all，非空 = custom），见 `normalizeSelection()`。
+    .description('Model selection mode: all, none, or only the checked models (unset = infer from enabledModels)')
     .volatile(),
   showDock: z.boolean().default(true)
     .description('Show the Loomy line (provider, model, today points) under the chat input box')
@@ -212,11 +226,32 @@ export function apply(ctx: Context, rawConfig: Config): void {
     return true
   }
 
-  const setEnabledModels = async (ids: readonly string[]): Promise<boolean> => {
+  const setEnabledModels = async (mode: SelectionMode, ids: readonly string[]): Promise<boolean> => {
     const settings = ctx.get('settings')
     if (settings === undefined) return false
-    await settings.update(settingsCompatNamespace(ctx), { enabledModels: [...ids] })
+    // 两个字段一起写：模式决定「空数组」到底是全给还是一个都不给。
+    await settings.update(settingsCompatNamespace(ctx), {
+      modelSelectionMode: mode,
+      enabledModels: mode === 'custom' ? [...ids] : [],
+    })
     return true
+  }
+
+  /** 当前的模型勾选（模式 + 勾选 id）。 */
+  const selection = (): Selection => normalizeSelection(
+    current().enabledModels,
+    current().modelSelectionMode,
+  )
+
+  /**
+   * 反选：把「现在暴露的」翻成「现在没暴露的」。
+   *
+   * 全选 → 一个都不给、一个都不给 → 全选、部分 → 补集。语义在 `catalog.ts` 里，
+   * 这里只负责落盘。
+   */
+  const invertSelection = async (): Promise<boolean> => {
+    const next = invertModelSelection(catalog.current(), selection())
+    return setEnabledModels(next.mode, next.enabled)
   }
 
   /** 把池与账号文档对齐（新增/删除账号后调）。 */
@@ -301,10 +336,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
     catalog,
     usage,
     points,
-    enabledModels: () => current().enabledModels,
+    selection,
     logger: ctx.logger,
   })
-
   let stopped = false
 
   // ---- 路由 ----------------------------------------------------------------
@@ -312,8 +346,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
     registerLoomyStatusRoutes(webCtx, {
       store,
       models: () => catalog.current(),
-      enabledModels: () => current().enabledModels,
+      selection,
       setEnabledModels,
+      invertSelection,
       pool: () => pool.list(),
       strategy: () => pool.currentStrategy(),
       reviveAccount: id => pool.revive(id),
@@ -447,7 +482,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
       const loomy = createLoomyAdapter({
         shim,
         catalog,
-        enabledModels: () => current().enabledModels,
+        selection,
         resolveAttachments: () => ctx.get('attachments'),
       })
 

@@ -6,7 +6,15 @@ import {
   parseReasoningEfforts,
   toModelInfo,
 } from '../src/discovery.ts'
-import { filterEnabledModels, mergeModelLists, type LoomyModelInfo } from '../src/catalog.ts'
+import {
+  filterEnabledModels,
+  invertSelection,
+  isSelectionMode,
+  mergeModelLists,
+  normalizeSelection,
+  resolveSelection,
+  type LoomyModelInfo,
+} from '../src/catalog.ts'
 import { resolveRequestedModel } from '../src/shim.ts'
 import { LoomyCatalog } from '../src/catalog.ts'
 
@@ -131,12 +139,86 @@ describe('catalog helpers', () => {
     expect(filterEnabledModels([glm, spark], ['gone'])).toHaveLength(2)
     expect(filterEnabledModels([glm, spark], [])).toHaveLength(2)
   })
-
   it('finds a model by case-insensitive id and strips the imodel/ prefix', () => {
     const catalog = new LoomyCatalog()
     catalog.set([glm])
     expect(catalog.find('glm-5.3-flash')?.id).toBe('GLM-5.3-Flash')
     expect(catalog.find('imodel/GLM-5.3-Flash')?.id).toBe('GLM-5.3-Flash')
+  })
+})
+
+/**
+ * 勾选模式与反选。
+ *
+ * 这一组是「全选 / 反选」能成立的前提：**全选和全不选都是空数组**，所以必须有显式模式，
+ * 否则反选全选的结果会被重新解释成全选。
+ */
+describe('selection modes', () => {
+  const glm: LoomyModelInfo = { id: 'GLM-5.3-Flash', name: 'GLM', contextWindow: 100, maxTokens: 10, supportsImages: true }
+  const spark: LoomyModelInfo = { id: 'spark-x', name: 'Spark', contextWindow: 1000, maxTokens: 100, supportsImages: false }
+  const models = [glm, spark]
+
+  it('infers the mode from the legacy array when no mode is stored', () => {
+    expect(normalizeSelection(undefined)).toEqual({ mode: 'all', enabled: [] })
+    expect(normalizeSelection([])).toEqual({ mode: 'all', enabled: [] })
+    expect(normalizeSelection(['spark-x'])).toEqual({ mode: 'custom', enabled: ['spark-x'] })
+  })
+
+  it('ignores the array in all/none mode and drops blanks in custom', () => {
+    expect(normalizeSelection(['spark-x'], 'all')).toEqual({ mode: 'all', enabled: [] })
+    expect(normalizeSelection(['spark-x'], 'none')).toEqual({ mode: 'none', enabled: [] })
+    expect(normalizeSelection(['', '  ', 'spark-x'], 'custom')).toEqual({ mode: 'custom', enabled: ['spark-x'] })
+  })
+
+  it('rejects an unknown mode value', () => {
+    expect(isSelectionMode('all')).toBe(true)
+    expect(isSelectionMode('custom')).toBe(true)
+    expect(isSelectionMode('every')).toBe(false)
+    expect(isSelectionMode(undefined)).toBe(false)
+  })
+
+  it('resolves each mode to a model list', () => {
+    expect(resolveSelection(models, { mode: 'all', enabled: [] })).toHaveLength(2)
+    expect(resolveSelection(models, { mode: 'none', enabled: [] })).toHaveLength(0)
+    expect(resolveSelection(models, { mode: 'custom', enabled: ['spark-x'] }).map(m => m.id)).toEqual(['spark-x'])
+  })
+
+  it('still falls back to the whole catalog for a stale custom list', () => {
+    expect(resolveSelection(models, { mode: 'custom', enabled: ['gone'] })).toHaveLength(2)
+  })
+
+  it('inverts all → none → all', () => {
+    const none = invertSelection(models, { mode: 'all', enabled: [] })
+    expect(none).toEqual({ mode: 'none', enabled: [] })
+    expect(resolveSelection(models, none)).toHaveLength(0)
+
+    const back = invertSelection(models, none)
+    expect(back).toEqual({ mode: 'all', enabled: [] })
+    expect(resolveSelection(models, back)).toHaveLength(2)
+  })
+
+  it('inverts a partial selection into its complement', () => {
+    const inverted = invertSelection(models, { mode: 'custom', enabled: ['spark-x'] })
+    expect(inverted).toEqual({ mode: 'custom', enabled: ['GLM-5.3-Flash'] })
+    expect(resolveSelection(models, inverted).map(m => m.id)).toEqual(['GLM-5.3-Flash'])
+  })
+
+  it('is an involution for every mode', () => {
+    for (const mode of ['all', 'none', 'custom'] as const) {
+      const selection = { mode, enabled: mode === 'custom' ? ['spark-x'] : [] }
+      const twice = invertSelection(models, invertSelection(models, selection))
+      expect(twice).toEqual(selection)
+    }
+  })
+
+  it('leaves an empty catalog alone', () => {
+    expect(invertSelection([], { mode: 'custom', enabled: ['spark-x'] })).toEqual({ mode: 'custom', enabled: ['spark-x'] })
+    expect(invertSelection([], { mode: 'all', enabled: [] })).toEqual({ mode: 'all', enabled: [] })
+  })
+
+  it('exposes nothing to the pickers in none mode', () => {
+    expect(filterEnabledModels(models, [], 'none')).toHaveLength(0)
+    expect(filterEnabledModels(models, [], 'all')).toHaveLength(2)
   })
 })
 

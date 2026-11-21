@@ -70,18 +70,28 @@ function fakeContext(): {
   routes: RegisteredRoute[]
   adapters: string[][]
   directory: unknown[]
+  /** 记下每次 settings.update 的补丁（用于断言「模式」有没有跟着勾选一起落盘）。 */
+  settingsWrites: Record<string, unknown>[]
   dispose: () => void
 } {
   const routes: RegisteredRoute[] = []
   const adapters: string[][] = []
   const directory: unknown[] = []
+  const settingsWrites: Record<string, unknown>[] = []
   const disposers: (() => void)[] = []
   const noop = (): void => {}
   const logger = { debug: noop, info: noop, warn: noop, error: noop }
   const handle = (): void => {}
+  // 宿主在真实环境里提供 settings 服务；这里给一个只记账的替身。只写 enabledModels 的话，
+  // 「全选」与「全不选」都是空数组 —— 所以必须能看到模式一起被写下去。
+  const settings = {
+    async update(_ns: unknown, patch: Record<string, unknown>) {
+      settingsWrites.push(patch)
+    },
+  }
   const ctx = {
     logger,
-    get: () => undefined,
+    get: (name: string) => (name === 'settings' ? settings : undefined),
     // 真实的 cordis 子上下文与父上下文共享全部服务；这里也把同一个对象传下去。
     inject: (names: readonly string[], callback: (sub: unknown) => void) => {
       if (!names.includes('webServer')) return
@@ -113,6 +123,7 @@ function fakeContext(): {
     routes,
     adapters,
     directory,
+    settingsWrites,
     dispose: () => {
       for (const disposer of disposers) {
         try {
@@ -173,6 +184,7 @@ describe('apply()', () => {
         '/api/loomy/models',
         '/api/loomy/points',
         '/api/loomy/refresh-models',
+        '/api/loomy/selection/invert',
         '/api/loomy/session',
         '/api/loomy/sms',
         '/api/loomy/status',
@@ -203,7 +215,7 @@ describe('apply()', () => {
     const { ctx, routes, dispose } = fakeContext()
     apply(ctx as never, {})
     try {
-      await waitFor(() => routes.length === 11)
+      await waitFor(() => routes.length === 12)
       const route = routes.find(entry => entry.path === '/api/loomy/status')
       expect(route).toBeDefined()
 
@@ -254,7 +266,7 @@ describe('apply()', () => {
     const { ctx, routes, dispose } = fakeContext()
     apply(ctx as never, {})
     try {
-      await waitFor(() => routes.length === 11)
+      await waitFor(() => routes.length === 12)
       const route = routes.find(entry => entry.path === '/api/loomy/status')
       const res = fakeRes()
       await route?.handler(fakeReq({ headers: { host: 'evil.example.com' } }), res)
@@ -269,7 +281,7 @@ describe('apply()', () => {
     const { ctx, routes, dispose } = fakeContext()
     apply(ctx as never, {})
     try {
-      await waitFor(() => routes.length === 11)
+      await waitFor(() => routes.length === 12)
       const route = routes.find(entry => entry.path === '/api/loomy/status')
       const res = fakeRes()
       await route?.handler(fakeReq({ headers: { host: '127.0.0.1:58852', origin: 'https://evil.example.com' } }), res)
@@ -284,7 +296,7 @@ describe('apply()', () => {
     const { ctx, routes, dispose } = fakeContext()
     apply(ctx as never, {})
     try {
-      await waitFor(() => routes.length === 11)
+      await waitFor(() => routes.length === 12)
       const route = routes.find(entry => entry.path === '/api/loomy/dock')
       const res = fakeRes()
       await route?.handler(fakeReq({ method: 'POST', url: '/api/loomy/dock', headers: { host: '127.0.0.1:58852' } }), res)
@@ -299,7 +311,7 @@ describe('apply()', () => {
     const { ctx, routes, dispose } = fakeContext()
     apply(ctx as never, {})
     try {
-      await waitFor(() => routes.length === 11)
+      await waitFor(() => routes.length === 12)
       const route = routes.find(entry => entry.path === '/api/loomy/login')
       const res = fakeRes()
       await route?.handler(fakeReq({
@@ -319,7 +331,7 @@ describe('apply()', () => {
     const { ctx, routes, dispose } = fakeContext()
     apply(ctx as never, {})
     try {
-      await waitFor(() => routes.length === 11)
+      await waitFor(() => routes.length === 12)
       const route = routes.find(entry => entry.path === '/api/loomy/accounts')
       const res = fakeRes()
       await route?.handler(fakeReq({
@@ -339,7 +351,7 @@ describe('apply()', () => {
     const { ctx, routes, dispose } = fakeContext()
     apply(ctx as never, {})
     try {
-      await waitFor(() => routes.length === 11)
+      await waitFor(() => routes.length === 12)
       const route = routes.find(entry => entry.path === '/api/loomy/doctor')
       let parsed: { report: { ok: boolean; checks: { id: string; ok: boolean }[] } } = { report: { ok: true, checks: [] } }
       for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -352,6 +364,113 @@ describe('apply()', () => {
       expect(parsed.report.checks.map(check => check.id)).toContain('provider')
       expect(parsed.report.checks.find(check => check.id === 'provider')?.ok).toBe(true)
       expect(parsed.report.ok).toBe(false)
+    } finally {
+      dispose()
+    }
+  })
+
+  it('stores the selection mode together with the checked ids', async () => {
+    tempHome()
+    const { ctx, routes, settingsWrites, dispose } = fakeContext()
+    apply(ctx as never, {})
+    try {
+      await waitFor(() => routes.length === 12)
+      const route = routes.find(entry => entry.path === '/api/loomy/enabled-models')
+      const post = async (body: unknown): Promise<FakeResponse> => {
+        const res = fakeRes()
+        await route?.handler(fakeReq({
+          method: 'POST',
+          url: '/api/loomy/enabled-models',
+          headers: { host: '127.0.0.1:58852', 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        }), res)
+        return res
+      }
+
+      // 「全不选」必须能和「全选」区分开：两者都是空 enabledModels，靠模式分辨。
+      const none = await post({ mode: 'none', enabledModels: [] })
+      expect(none.status).toBe(200)
+      expect(settingsWrites.at(-1)).toEqual({ modelSelectionMode: 'none', enabledModels: [] })
+
+      const all = await post({ mode: 'all', enabledModels: [] })
+      expect(all.status).toBe(200)
+      expect(settingsWrites.at(-1)).toEqual({ modelSelectionMode: 'all', enabledModels: [] })
+
+      const custom = await post({ mode: 'custom', enabledModels: ['spark-x'] })
+      expect(custom.status).toBe(200)
+      expect(settingsWrites.at(-1)).toEqual({ modelSelectionMode: 'custom', enabledModels: ['spark-x'] })
+
+      // 老客户端不带 mode：按旧约定推断（非空 = custom）。
+      const legacy = await post({ enabledModels: ['spark-x'] })
+      expect(legacy.status).toBe(200)
+      expect(settingsWrites.at(-1)).toEqual({ modelSelectionMode: 'custom', enabledModels: ['spark-x'] })
+
+      const bad = await post({ mode: 'every', enabledModels: [] })
+      expect(bad.status).toBe(400)
+    } finally {
+      dispose()
+    }
+  })
+
+  it('keeps a legacy enabledModels list working as a custom selection', async () => {
+    tempHome()
+    const { ctx, routes, dispose } = fakeContext()
+    // 升级前存下来的配置只有 enabledModels，没有模式键。
+    apply(ctx as never, { enabledModels: ['spark-x'] })
+    try {
+      await waitFor(() => routes.length === 12)
+      const route = routes.find(entry => entry.path === '/api/loomy/enabled-models')
+      const res = fakeRes()
+      await route?.handler(fakeReq(), res)
+      const parsed = JSON.parse(res.body ?? '{}') as { selection: { mode: string } }
+      expect(res.status).toBe(200)
+      expect(parsed.selection.mode).toBe('custom')
+    } finally {
+      dispose()
+    }
+  })
+
+  it('answers the invert route and rejects a non-JSON write', async () => {
+    tempHome()
+    const { ctx, routes, settingsWrites, dispose } = fakeContext()
+    apply(ctx as never, {})
+    try {
+      await waitFor(() => routes.length === 12)
+      const route = routes.find(entry => entry.path === '/api/loomy/selection/invert')
+      expect(route).toBeDefined()
+
+      // 没有设置服务之外的问题时，反选会算出补集并落盘；目录为空时按当前选择原样写回。
+      const res = fakeRes()
+      await route?.handler(fakeReq({
+        method: 'POST',
+        url: '/api/loomy/selection/invert',
+        headers: { host: '127.0.0.1:58852', 'content-type': 'application/json' },
+        body: '{}',
+      }), res)
+      expect(res.status).toBe(200)
+      expect(settingsWrites).toHaveLength(1)
+      expect(settingsWrites[0]).toEqual({ modelSelectionMode: 'all', enabledModels: [] })
+
+      const plain = fakeRes()
+      await route?.handler(fakeReq({
+        method: 'POST',
+        url: '/api/loomy/selection/invert',
+        headers: { host: '127.0.0.1:58852' },
+      }), plain)
+      expect(plain.status).toBe(415)
+
+      const wrongMethod = fakeRes()
+      await route?.handler(fakeReq({ url: '/api/loomy/selection/invert' }), wrongMethod)
+      expect(wrongMethod.status).toBe(405)
+
+      const foreign = fakeRes()
+      await route?.handler(fakeReq({
+        method: 'POST',
+        url: '/api/loomy/selection/invert',
+        headers: { host: 'evil.example.com', 'content-type': 'application/json' },
+        body: '{}',
+      }), foreign)
+      expect(foreign.status).toBe(403)
     } finally {
       dispose()
     }

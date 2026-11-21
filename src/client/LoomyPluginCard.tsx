@@ -35,6 +35,9 @@ export interface LoomyPluginCardInjected {
 
 type Tab = 'accounts' | 'models' | 'points' | 'display'
 
+/** 勾选模式（客户端不能 import 宿主模块的运行时值，所以这里单独抄一份类型）。 */
+type LoomySelectionMode = 'all' | 'none' | 'custom'
+
 /** 状态轮询间隔。 */
 const POLL_MS = 30_000
 
@@ -404,22 +407,49 @@ export function LoomyPluginCard({ t }: LoomyPluginCardInjected): ReactElement {
     }
   }
 
-  const toggleModel = async (model: LoomyWebModel, next: boolean): Promise<void> => {
-    if (selection === undefined) return
-    const enabledIds = selection.choices.filter(choice => choice.enabled).map(choice => choice.id)
-    const set = new Set(enabledIds)
-    if (next) set.add(model.id)
-    else set.delete(model.id)
-    const all = selection.choices.map(choice => choice.id)
-    // 全选 = 空数组（语义是「全部都可用」，不是「一个都不给」）。
-    const payload = set.size === all.length ? [] : [...set]
+  /** 写回一份勾选（模式 + id）。宿主会把「模式」也存下来。 */
+  const saveSelection = async (mode: LoomySelectionMode, enabledModels: readonly string[]): Promise<void> => {
     setBusy('models')
     try {
       const result = await requestJson<{ selection: LoomyModelSelection }>('/api/loomy/enabled-models', {
         method: 'POST',
-        body: JSON.stringify({ enabledModels: payload }),
+        body: JSON.stringify({ mode, enabledModels }),
       })
       setSelection(result.selection)
+      setError(undefined)
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : String(caught))
+    } finally {
+      setBusy(undefined)
+    }
+  }
+
+  const toggleModel = async (model: LoomyWebModel, next: boolean): Promise<void> => {
+    if (selection === undefined) return
+    const set = new Set(selection.choices.filter(choice => choice.enabled).map(choice => choice.id))
+    if (next) set.add(model.id)
+    else set.delete(model.id)
+    const all = selection.choices.map(choice => choice.id)
+    // 全勾上就存回 `all`（空数组 + all 模式），否则按补集存成 custom —— 这样
+    // 「一个都不勾」是一个能表达、也能读回来的状态，而不是又变回全选。
+    if (set.size === all.length) await saveSelection('all', [])
+    else await saveSelection('custom', [...set])
+  }
+
+  const selectAll = async (): Promise<void> => {
+    await saveSelection('all', [])
+  }
+
+  /** 反选：语义在宿主侧算（`catalog.ts`），这里只按返回结果重绘。 */
+  const invertModels = async (): Promise<void> => {
+    setBusy('invert-models')
+    try {
+      const result = await requestJson<{ selection: LoomyModelSelection }>('/api/loomy/selection/invert', {
+        method: 'POST',
+        body: '{}',
+      })
+      setSelection(result.selection)
+      setError(undefined)
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : String(caught))
     } finally {
@@ -625,20 +655,19 @@ export function LoomyPluginCard({ t }: LoomyPluginCardInjected): ReactElement {
               variant="ghost"
               size="sm"
               disabled={selection === undefined || busy === 'models'}
-              onClick={() => {
-                if (selection === undefined) return
-                setBusy('models')
-                void requestJson<{ selection: LoomyModelSelection }>('/api/loomy/enabled-models', {
-                  method: 'POST',
-                  body: JSON.stringify({ enabledModels: [] }),
-                }).then(result => setSelection(result.selection)).catch(() => {}).finally(() => setBusy(undefined))
-              }}
+              onClick={() => void selectAll()}
             >
               {t('selectAll')}
             </Button>
-            <span className={styles.muted}>
-              {selection === undefined || !selection.restricted ? t('selectionAll') : t('selectionRestricted')}
-            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={selection === undefined || busy === 'invert-models' || (selection?.choices ?? []).length === 0}
+              onClick={() => void invertModels()}
+            >
+              {t('selectInvert')}
+            </Button>
+            <span className={styles.muted}>{selectionSummary(selection, t)}</span>
           </div>
           {(selection?.choices ?? []).length === 0 ? (
             <>
@@ -765,4 +794,24 @@ function strategyLabel(strategy: string | undefined, t: LoomyPluginCardInjected[
   if (strategy === 'round_robin') return t('strategyRoundRobin')
   if (strategy === 'lru') return t('strategyLru')
   return strategy ?? ''
+}
+
+/**
+ * 勾选状态那一句话。
+ *
+ * 判据是**模式**而不是「有没有未勾选项」：`none`（一个都不给）时每个勾选框都是空的，
+ * 用 `restricted` 判断会显示成「只暴露勾选的模型」，读起来像是还有得用。
+ */
+function selectionSummary(
+  selection: LoomyModelSelection | undefined,
+  t: LoomyPluginCardInjected['t'],
+): string {
+  if (selection === undefined) return t('statusLoading')
+  const total = selection.choices.length
+  const enabled = selection.choices.filter(choice => choice.enabled).length
+  // 目录还没发现出模型时，别把「一个都没有」说成「一个都不暴露」——那是两回事。
+  if (total === 0) return selection.mode === 'none' ? t('selectionNone') : t('modelsEmpty')
+  if (selection.mode === 'none' || enabled === 0) return t('selectionNone')
+  if (enabled === total) return t('selectionAll')
+  return t('selectionCount', { enabled, total })
 }

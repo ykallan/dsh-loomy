@@ -57,6 +57,10 @@ afterwards.
    An account whose session dies is renewed automatically when a password is stored, and marked
    *needs sign-in* otherwise.
 4. **Points** — the Points tab refreshes the real ledger per account.
+5. **Pick models** — check them one by one on the Models tab, or use **Select all** / **Invert**.
+   Invert is the true complement: all → none, none → all, partial → the rest; pressing it twice
+   returns to where you started. "None" is a real state (Loomy disappears from the picker) and is
+   not silently reinterpreted as "all".
 
 ## What the points are (and are not)
 
@@ -72,7 +76,8 @@ afterwards.
 
 | key | default | meaning |
 |---|---|---|
-| `enabledModels` | `[]` | model ids offered in the pickers (empty = all) |
+| `enabledModels` | `[]` | model ids offered in `custom` mode (empty = all) |
+| `modelSelectionMode` | unset | `all` / `none` / `custom`; unset infers the mode from `enabledModels` |
 | `showDock` | `true` | the Loomy status line under the chat input |
 | `showSidebarPanel` | `false` | entry in the sidebar icon column |
 | `showSettingsEntry` | `true` | entry in the settings navigation |

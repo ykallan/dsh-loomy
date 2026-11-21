@@ -66,16 +66,94 @@ export class LoomyCatalog {
   }
 }
 
-/** 把目录收窄到用户勾选的子集（空/缺省 = 全给）。 */
+/**
+ * 把目录收窄到用户勾选的模型。
+ *
+ * 三种**模式**（不是「空数组 = 全部」这种单一约定）：
+ *
+ * | mode | enabled 的含义 | 结果 |
+ * |---|---|---|
+ * | `all` | 忽略 | 目录全给（缺省） |
+ * | `none` | 忽略 | 一个都不给 |
+ * | `custom` | 勾选的 id | 只给勾选的 |
+ *
+ * 为什么不能只用 `enabledModels` 一个字段：**「全选」和「全不选」都是空数组**，无法区分。
+ * 有了显式模式，卡片上的「全选 / 反选」才是一对可逆的操作（反选全选的结果必须真的是
+ * 「一个都不给」，而不是又变回全选）。
+ *
+ * `custom` 且没有一个 id 命中目录时**退回全给**：目录刚刷新、勾选项对不上时，把模型选择器
+ * 直接清空比让它凭空消失要安全。
+ */
+export type SelectionMode = 'all' | 'none' | 'custom'
+
+/** 一次模型勾选选择。 */
+export interface Selection {
+  mode: SelectionMode
+  /** 仅 `custom` 时有意义；其余模式忽略。 */
+  enabled: readonly string[]
+}
+
+const SELECTION_MODES: readonly SelectionMode[] = ['all', 'none', 'custom']
+
+/** 是否是个合法的模式值（卡片/路由收到的字符串要过这一关）。 */
+export function isSelectionMode(value: unknown): value is SelectionMode {
+  return typeof value === 'string' && (SELECTION_MODES as readonly string[]).includes(value)
+}
+
+/**
+ * 由配置里的 `enabledModels`（可能没有显式模式）归一成一份 `Selection`。
+ *
+ * 缺省兼容旧配置：没写模式时，空数组 = 全给、非空 = 自定义。
+ */
+export function normalizeSelection(
+  enabled: readonly string[] | undefined,
+  mode?: SelectionMode,
+): Selection {
+  const ids = enabled === undefined ? [] : enabled.filter(id => id.trim() !== '')
+  if (mode !== undefined && isSelectionMode(mode)) {
+    return mode === 'custom' ? { mode: 'custom', enabled: ids } : { mode, enabled: [] }
+  }
+  return ids.length === 0 ? { mode: 'all', enabled: [] } : { mode: 'custom', enabled: ids }
+}
+
+/** 按选择算出真正暴露的模型。 */
+export function resolveSelection(
+  models: readonly LoomyModelInfo[],
+  selection: Selection,
+): readonly LoomyModelInfo[] {
+  if (selection.mode === 'none') return []
+  if (selection.mode === 'all') return models
+  const allow = new Set(selection.enabled.map(id => upstreamModelId(id).toLowerCase()).filter(id => id !== ''))
+  const kept = models.filter(model => allow.has(model.id.toLowerCase()))
+  return kept.length === 0 ? models : kept
+}
+
+/**
+ * 反选：把「当前暴露的」翻成「当前没暴露的」。
+ *
+ * 这是卡片「反选」按钮唯一要算的东西，放在这里是为了让语义在宿主与浏览器之间只有一份。
+ *
+ * @returns 新的选择（含模式，`enabled` 已按 `custom` 的口径整理好）。
+ */
+export function invertSelection(
+  models: readonly LoomyModelInfo[],
+  selection: Selection,
+): Selection {
+  if (models.length === 0) return normalizeSelection(selection.enabled, selection.mode)
+  const exposed = new Set(resolveSelection(models, selection).map(model => model.id.toLowerCase()))
+  const inverted = models.filter(model => !exposed.has(model.id.toLowerCase()))
+  if (inverted.length === models.length) return { mode: 'all', enabled: [] }
+  if (inverted.length === 0) return { mode: 'none', enabled: [] }
+  return { mode: 'custom', enabled: inverted.map(model => model.id) }
+}
+
+/** 把目录收窄到用户勾选的模型（带模式；只传数组时按旧约定推断）。 */
 export function filterEnabledModels(
   models: readonly LoomyModelInfo[],
   enabled: readonly string[] | undefined,
+  mode?: SelectionMode,
 ): readonly LoomyModelInfo[] {
-  if (enabled === undefined || enabled.length === 0) return models
-  const allow = new Set(enabled.map(id => upstreamModelId(id).toLowerCase()).filter(id => id !== ''))
-  const kept = models.filter(model => allow.has(model.id.toLowerCase()))
-  // 勾选项全都对不上（比如目录刚刷新过）时不要变成空列表：那会让模型选择器直接消失。
-  return kept.length === 0 ? models : kept
+  return resolveSelection(models, normalizeSelection(enabled, mode))
 }
 
 /**

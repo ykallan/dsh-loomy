@@ -2,7 +2,7 @@
   "name": "dsh-loomy",
   "displayName": "DSH Loomy Connect",
   "description": "把 Loomy（讯飞桌面助手）的模型额度接入 DeepSeek Harness —— 服务端手机号+密码登录，登录后即可在 DSH 里使用 Loomy 模型网关的模型（spark-x / GLM-5.3-Flash / qwen3.8-flash / deepseek-v4-flash-0731 / Kimi-k2.6 …）；支持多账号池、额度感知选号、动态模型目录与本机点数账本。",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "packageManager": "pnpm@11.28.5",
   "author": "elegant01",
   "keywords": [

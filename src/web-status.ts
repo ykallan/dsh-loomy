@@ -23,6 +23,13 @@ import type { AccountPoints } from './points.ts'
 import type { UsageSnapshot } from './usage.ts'
 import type { ShimStats } from './shim.ts'
 import { LOOMY_PROVIDER } from './adapter.ts'
+import {
+  isSelectionMode,
+  normalizeSelection,
+  resolveSelection,
+  type Selection,
+  type SelectionMode,
+} from './catalog.ts'
 import { hostIsLoopback, originIsLoopback } from './loopback.ts'
 
 // ---------------------------------------------------------------------------
@@ -32,6 +39,8 @@ import { hostIsLoopback, originIsLoopback } from './loopback.ts'
 export const LOOMY_STATUS_PATH = '/api/loomy/status'
 export const LOOMY_MODELS_PATH = '/api/loomy/models'
 export const LOOMY_SELECTION_PATH = '/api/loomy/enabled-models'
+/** 反选：POST 一次，把当前的勾选翻成补集（全选 ⇄ 一个都不给）。 */
+export const LOOMY_SELECTION_INVERT_PATH = '/api/loomy/selection/invert'
 export const LOOMY_ACCOUNTS_PATH = '/api/loomy/accounts'
 export const LOOMY_LOGIN_PATH = '/api/loomy/login'
 export const LOOMY_SMS_PATH = '/api/loomy/sms'
@@ -110,6 +119,8 @@ export interface LoomyWebStatus {
 /** 模型勾选面板的数据。 */
 export interface LoomyModelSelection {
   choices: (LoomyWebModel & { enabled: boolean })[]
+  /** 当前模式：`all` / `none` / `custom`。 */
+  mode: SelectionMode
   /** 已选子集是否小于全集。 */
   restricted: boolean
   writable: boolean
@@ -127,8 +138,11 @@ export interface PointsRefreshResult {
 export interface LoomyRouteOptions {
   store: LoomyAccountStore
   models: () => readonly LoomyModelInfo[]
-  enabledModels: () => readonly string[] | undefined
-  setEnabledModels: (ids: readonly string[]) => Promise<boolean>
+  /** 当前勾选（模式 + id）。 */
+  selection: () => Selection
+  setEnabledModels: (mode: SelectionMode, ids: readonly string[]) => Promise<boolean>
+  /** 反选（全选 ⇄ 一个都不给，部分 → 补集）。 */
+  invertSelection: () => Promise<boolean>
   pool: () => AccountRuntime[]
   strategy: () => PoolStrategy
   reviveAccount: (id: string) => void
@@ -259,16 +273,15 @@ export async function buildStatus(deps: LoomyRouteOptions): Promise<LoomyWebStat
 /** 勾选面板的数据。 */
 export function selectionOf(deps: LoomyRouteOptions): LoomyModelSelection {
   const models = deps.models()
-  const enabled = deps.enabledModels()
-  const allow = enabled === undefined || enabled.length === 0
-    ? undefined
-    : new Set(enabled.map(id => id.toLowerCase()))
+  const selection = deps.selection()
+  const exposed = new Set(resolveSelection(models, selection).map(model => model.id.toLowerCase()))
   const choices = models.map(model => ({
     ...toWebModel(model),
-    enabled: allow === undefined || allow.has(model.id.toLowerCase()),
+    enabled: exposed.has(model.id.toLowerCase()),
   }))
   return {
     choices,
+    mode: selection.mode,
     restricted: choices.some(choice => !choice.enabled),
     writable: true,
   }
@@ -332,7 +345,47 @@ function selectionHandler(deps: LoomyRouteOptions): Handler {
         json(res, 400, { error: 'enabledModels must be an array of model ids' })
         return
       }
-      const ok = await deps.setEnabledModels(body.enabledModels as string[])
+      // 模式缺省时按旧约定推断（空数组 = 全给），这样老客户端仍然能用。
+      const requested = body.mode
+      if (requested !== undefined && !isSelectionMode(requested)) {
+        json(res, 400, { error: "mode must be one of 'all', 'none', 'custom'" })
+        return
+      }
+      const selection = normalizeSelection(body.enabledModels as string[], requested)
+      const ok = await deps.setEnabledModels(selection.mode, selection.enabled)
+      if (!ok) {
+        json(res, 403, { error: 'selection-not-writable' })
+        return
+      }
+      json(res, 200, { ok: true, selection: selectionOf(deps) })
+    } catch (error: unknown) {
+      json(res, 400, { error: safeMessage(error) })
+    }
+  }
+}
+
+/**
+ * 反选：全选 ⇄ 一个都不给，部分选 → 补集。
+ *
+ * 放在宿主侧算，是为了让「全选 / 反选」这一对操作的语义只有一份实现（`catalog.ts`）；
+ * 浏览器只按返回的新选择重绘。
+ */
+function invertSelectionHandler(deps: LoomyRouteOptions): Handler {
+  return async (req, res) => {
+    if (!loopbackRequest(req)) {
+      json(res, 403, { error: 'request-not-trusted' })
+      return
+    }
+    if (req.method !== 'POST') {
+      json(res, 405, { error: 'method not allowed' })
+      return
+    }
+    if (!isJsonRequest(req)) {
+      json(res, 415, { error: 'content-type must be application/json' })
+      return
+    }
+    try {
+      const ok = await deps.invertSelection()
       if (!ok) {
         json(res, 403, { error: 'selection-not-writable' })
         return
@@ -674,6 +727,7 @@ export function registerLoomyStatusRoutes(ctx: Context, deps: LoomyRouteOptions)
       ctx.webServer.register({ kind: 'exact', path: LOOMY_STATUS_PATH, handler: statusHandler(deps) }),
       ctx.webServer.register({ kind: 'exact', path: LOOMY_MODELS_PATH, handler: modelsHandler(deps) }),
       ctx.webServer.register({ kind: 'exact', path: LOOMY_SELECTION_PATH, handler: selectionHandler(deps) }),
+      ctx.webServer.register({ kind: 'exact', path: LOOMY_SELECTION_INVERT_PATH, handler: invertSelectionHandler(deps) }),
       ctx.webServer.register({ kind: 'exact', path: LOOMY_ACCOUNTS_PATH, handler: accountsHandler(deps) }),
       ctx.webServer.register({ kind: 'exact', path: LOOMY_LOGIN_PATH, handler: loginHandler(deps) }),
       ctx.webServer.register({ kind: 'exact', path: LOOMY_SMS_PATH, handler: smsHandler(deps) }),

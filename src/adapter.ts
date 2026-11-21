@@ -19,7 +19,7 @@ import type { LlmModelInfo, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
-import { filterEnabledModels, type LoomyCatalog, type LoomyModelInfo } from './catalog.ts'
+import { resolveSelection, type LoomyCatalog, type LoomyModelInfo, type Selection } from './catalog.ts'
 import type { LoomyShim } from './shim.ts'
 
 /** 这个 bundle 拥有的 provider 路由。与 `cordis.patch.yml` 保持一致。 */
@@ -70,7 +70,8 @@ const INERT_AUTH = {
 export interface LoomyAdapterOptions {
   shim: LoomyShim
   catalog: LoomyCatalog
-  enabledModels?: () => readonly string[] | undefined
+  /** 用户勾选的模型（模式 + id）；缺省全给。 */
+  selection?: () => Selection
   resolveAttachments?: () => AttachmentStore | undefined
 }
 
@@ -120,7 +121,7 @@ function toPiModel(info: LoomyModelInfo, baseUrl: string): Model<Api> {
 }
 
 export function createLoomyAdapter(options: LoomyAdapterOptions): LoomyAdapter {
-  const { shim, catalog, enabledModels, resolveAttachments } = options
+  const { shim, catalog, selection, resolveAttachments } = options
 
   const buildModels = (): Model<Api>[] => {
     const baseUrl = `${shim.baseUrl()}/v1`
@@ -161,7 +162,7 @@ export function createLoomyAdapter(options: LoomyAdapterOptions): LoomyAdapter {
 
   let profiles = new Map<string, ResolvedPiAiProviderProfile>([[LOOMY_PROVIDER, profile]])
 
-  const adapter = new LoomyPiAiAdapter(catalog, enabledModels, {
+  const adapter = new LoomyPiAiAdapter(catalog, selection, {
     profiles: () => profiles,
     auth: INERT_AUTH,
     resolveApiKey: async () => shim.token(),
@@ -179,21 +180,21 @@ export function createLoomyAdapter(options: LoomyAdapterOptions): LoomyAdapter {
 /** 把**对外**模型面收窄到用户勾选的子集（分发不受影响）。 */
 class LoomyPiAiAdapter extends PiAiAdapter {
   private readonly catalog: LoomyCatalog
-  private readonly enabledModels: (() => readonly string[] | undefined) | undefined
+  private readonly selection: (() => Selection) | undefined
 
   constructor(
     catalog: LoomyCatalog,
-    enabledModels: (() => readonly string[] | undefined) | undefined,
+    selection: (() => Selection) | undefined,
     options: ConstructorParameters<typeof PiAiAdapter>[0],
   ) {
     super(options)
     this.catalog = catalog
-    this.enabledModels = enabledModels
+    this.selection = selection
   }
 
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     const models = await super.listModels(provider)
-    const allowed = filterEnabledModels(this.catalog.current(), this.enabledModels?.())
+    const allowed = resolveSelection(this.catalog.current(), this.selection?.() ?? { mode: 'all', enabled: [] })
     const catalogIds = new Set(this.catalog.current().map(entry => entry.id))
     const allowedIds = new Set(allowed.map(entry => entry.id))
     return models.filter(model => !catalogIds.has(model.id) || allowedIds.has(model.id))

@@ -27,7 +27,7 @@ import {
 } from './config.ts'
 import type { LoomyAccountStore } from './accounts.ts'
 import type { LoomyAccountPool } from './account-pool.ts'
-import { filterEnabledModels, type LoomyCatalog, type LoomyModelInfo } from './catalog.ts'
+import { resolveSelection, type LoomyCatalog, type LoomyModelInfo, type Selection } from './catalog.ts'
 import { LoomyQueueGate, QUEUE_FULL_MESSAGE } from './queue.ts'
 import { looksLikeQuotaExhausted, type LoomyPointsTracker } from './points.ts'
 import type { LoomyUsageTracker } from './usage.ts'
@@ -63,8 +63,8 @@ export interface LoomyShimOptions {
   usage: LoomyUsageTracker
   /** 点数缓存：「额度用尽」标记与余额读数。 */
   points: LoomyPointsTracker
-  /** 用户勾选的模型（空 = 全给）。 */
-  enabledModels?: () => readonly string[] | undefined
+  /** 用户勾选的模型（模式 + id；缺省全给）。 */
+  selection?: () => Selection
   logger?: { debug: (message: string) => void; warn: (message: string, ...rest: unknown[]) => void }
 }
 
@@ -166,7 +166,7 @@ export function createLoomyShim(options: LoomyShimOptions): LoomyShim {
       json(res, 403, { error: 'request-not-trusted' })
       return
     }
-    const models = filterEnabledModels(catalog.current(), options.enabledModels?.())
+    const models = resolveSelection(catalog.current(), options.selection?.() ?? { mode: 'all', enabled: [] })
     json(res, 200, {
       object: 'list',
       data: models.map(model => ({

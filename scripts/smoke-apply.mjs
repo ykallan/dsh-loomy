@@ -22,6 +22,13 @@ const errors = []
 const disposers = []
 const logs = []
 
+const settingsWrites = []
+const settings = {
+  async update(_ns, patch) {
+    settingsWrites.push(patch)
+  },
+}
+
 const ctx = {
   logger: {
     debug: message => logs.push(['debug', message]),
@@ -29,7 +36,8 @@ const ctx = {
     warn: (message, ...rest) => logs.push(['warn', message, ...rest]),
     error: (message, ...rest) => errors.push([message, ...rest]),
   },
-  get: () => undefined,
+  // settings 服务在真实宿主里是有的；这里给个只记账的替身，好让勾选写入这条路能走通。
+  get: name => (name === 'settings' ? settings : undefined),
   inject: (names, callback) => {
     if (names.includes('webServer')) callback(ctx)
   },
@@ -70,7 +78,7 @@ const check = (label, ok, detail = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'} ${label}${detail === '' ? '' : ` — ${detail}`}`)
 }
 
-check('11 routes registered', routes.length === 11, String(routes.length))
+check('12 routes registered', routes.length === 12, String(routes.length))
 check('adapter registered for loomy', JSON.stringify(adapters) === '[["loomy"]]', JSON.stringify(adapters))
 check('directory entry registered', directory.length === 1)
 
@@ -102,6 +110,27 @@ const dockRoute = routes.find(route => route.path === '/api/loomy/dock')
 const plain = { writeHead(status) { this.status = status }, end(payload) { this.body = payload }, on() {}, off() {} }
 await dockRoute.handler({ method: 'POST', url: '/api/loomy/dock', headers: { host: '127.0.0.1:58852' } }, plain)
 check('write without JSON content-type is rejected', plain.status === 415, String(plain.status))
+
+const invertRoute = routes.find(route => route.path === '/api/loomy/selection/invert')
+check('invert route is mounted', invertRoute !== undefined)
+const inverted = { writeHead(status) { this.status = status }, end(payload) { this.body = payload }, on() {}, off() {} }
+await invertRoute.handler({
+  method: 'POST',
+  url: '/api/loomy/selection/invert',
+  headers: { host: '127.0.0.1:58852', 'content-type': 'application/json' },
+  on(event, handler) {
+    if (event === 'data') handler(Buffer.from('{}'))
+    if (event === 'end') handler()
+  },
+  destroy() {},
+}, inverted)
+check('invert answers 200', inverted.status === 200, String(inverted.status))
+check('invert reports a selection mode', typeof JSON.parse(inverted.body ?? '{}').selection?.mode === 'string')
+check(
+  'invert stores the mode next to the ids',
+  settingsWrites.at(-1) !== undefined && 'modelSelectionMode' in settingsWrites.at(-1),
+  JSON.stringify(settingsWrites.at(-1) ?? null),
+)
 
 for (const dispose of disposers) {
   try {

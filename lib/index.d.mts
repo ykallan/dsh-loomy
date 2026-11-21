@@ -95,6 +95,111 @@ declare class LoomyAccountPool {
   hasUsable(): boolean;
 }
 /**
+ * Loomy 模型目录。
+ *
+ * **目录只放上游给的东西。** 唯一来源是 `GET /models`（`docs/PROTOCOL.md` 第 5 节）：
+ * 启动时、每小时、以及卡片上「刷新模型」各拉一次，取所有成功账号的并集。上游没返回的
+ * 模型就是没有，未登录时目录为空 —— 不拿一份历史名单冒充「可用模型」。
+ *
+ * 为什么必须守住这条：上游对**不认识的模型 id 会静默回退**到 `deepseek-v4-flash-0731`
+ * 并回 200。所以「目录里有什么」是唯一可信的可用模型集合，猜一个 id 只会让用户以为
+ * 自己在用别的模型。
+ *
+ * @module dsh-loomy/catalog
+ */
+/** 上游声明的思考强度。 */
+interface LoomyModelThinking {
+  /** 可选档位（`reasoning_efforts` 的原值）。 */
+  levels: readonly string[];
+  /** 上游默认档位。 */
+  default?: string;
+}
+/** 一个暴露给 DSH 的模型。 */
+interface LoomyModelInfo {
+  /** 模型 id —— 与上游 wire id 相同（不做别名映射）。 */
+  id: string;
+  /** 展示名（上游 `name`，里面有 `x0.8` 这样的点数倍率）。 */
+  name: string;
+  contextWindow: number;
+  /** `contextWindow` 是上游真的给的，还是兜底值。卡片只在真值时印规格。 */
+  contextWindowKnown?: boolean;
+  maxTokens: number;
+  supportsImages: boolean;
+  /** 是不是思考模型（`capabilities.reasoning`）。 */
+  reasoning?: boolean;
+  /** 支持工具调用（`capabilities.function_calling`）。 */
+  toolCall?: boolean;
+  /** 上游声明支持流式（`capabilities.streaming`）。 */
+  streaming?: boolean;
+  /** 上游声明的思考档位。空/缺省 = 不显示推理档位选择器。 */
+  thinking?: LoomyModelThinking;
+  /** 点数倍率（上游 `name` 里的 `x0.8`）。只展示，不参与路由。 */
+  multiplier?: number;
+}
+/** 可变目录，由 shim 的 `/v1/models` 与适配器共享。 */
+declare class LoomyCatalog {
+  /** 空目录起步：没发现过就是没有模型。 */
+  private models;
+  current(): readonly LoomyModelInfo[];
+  set(models: readonly LoomyModelInfo[]): void;
+  /** 按 id 找一条（大小写不敏感，接受 `imodel/` 前缀）。 */
+  find(id: string): LoomyModelInfo | undefined;
+}
+/**
+ * 把目录收窄到用户勾选的模型。
+ *
+ * 三种**模式**（不是「空数组 = 全部」这种单一约定）：
+ *
+ * | mode | enabled 的含义 | 结果 |
+ * |---|---|---|
+ * | `all` | 忽略 | 目录全给（缺省） |
+ * | `none` | 忽略 | 一个都不给 |
+ * | `custom` | 勾选的 id | 只给勾选的 |
+ *
+ * 为什么不能只用 `enabledModels` 一个字段：**「全选」和「全不选」都是空数组**，无法区分。
+ * 有了显式模式，卡片上的「全选 / 反选」才是一对可逆的操作（反选全选的结果必须真的是
+ * 「一个都不给」，而不是又变回全选）。
+ *
+ * `custom` 且没有一个 id 命中目录时**退回全给**：目录刚刷新、勾选项对不上时，把模型选择器
+ * 直接清空比让它凭空消失要安全。
+ */
+type SelectionMode = 'all' | 'none' | 'custom';
+/** 一次模型勾选选择。 */
+interface Selection {
+  mode: SelectionMode;
+  /** 仅 `custom` 时有意义；其余模式忽略。 */
+  enabled: readonly string[];
+}
+/** 是否是个合法的模式值（卡片/路由收到的字符串要过这一关）。 */
+declare function isSelectionMode(value: unknown): value is SelectionMode;
+/**
+ * 由配置里的 `enabledModels`（可能没有显式模式）归一成一份 `Selection`。
+ *
+ * 缺省兼容旧配置：没写模式时，空数组 = 全给、非空 = 自定义。
+ */
+declare function normalizeSelection(enabled: readonly string[] | undefined, mode?: SelectionMode): Selection;
+/** 按选择算出真正暴露的模型。 */
+declare function resolveSelection(models: readonly LoomyModelInfo[], selection: Selection): readonly LoomyModelInfo[];
+/**
+ * 反选：把「当前暴露的」翻成「当前没暴露的」。
+ *
+ * 这是卡片「反选」按钮唯一要算的东西，放在这里是为了让语义在宿主与浏览器之间只有一份。
+ *
+ * @returns 新的选择（含模式，`enabled` 已按 `custom` 的口径整理好）。
+ */
+declare function invertSelection(models: readonly LoomyModelInfo[], selection: Selection): Selection;
+/** 把目录收窄到用户勾选的模型（带模式；只传数组时按旧约定推断）。 */
+declare function filterEnabledModels(models: readonly LoomyModelInfo[], enabled: readonly string[] | undefined, mode?: SelectionMode): readonly LoomyModelInfo[];
+/**
+ * 合并多路来源（多账号）的模型清单。
+ *
+ * 规则：
+ *  - 按 id 去重（大小写不敏感）；
+ *  - 参数更全的一条优先（有真窗口 > 兜底窗口，支持图片 > 不支持）；
+ *  - 输出按 id 排序，保证刷新前后顺序稳定。
+ */
+declare function mergeModelLists(sets: readonly (readonly LoomyModelInfo[])[]): readonly LoomyModelInfo[];
+/**
  * The header type declaration of `undici`.
  */
 type IncomingHttpHeaders = Record<string, string | string[] | undefined>;
@@ -822,68 +927,6 @@ declare namespace MockInterceptor {
   };
 }
 /**
- * Loomy 模型目录。
- *
- * **目录只放上游给的东西。** 唯一来源是 `GET /models`（`docs/PROTOCOL.md` 第 5 节）：
- * 启动时、每小时、以及卡片上「刷新模型」各拉一次，取所有成功账号的并集。上游没返回的
- * 模型就是没有，未登录时目录为空 —— 不拿一份历史名单冒充「可用模型」。
- *
- * 为什么必须守住这条：上游对**不认识的模型 id 会静默回退**到 `deepseek-v4-flash-0731`
- * 并回 200。所以「目录里有什么」是唯一可信的可用模型集合，猜一个 id 只会让用户以为
- * 自己在用别的模型。
- *
- * @module dsh-loomy/catalog
- */
-/** 上游声明的思考强度。 */
-interface LoomyModelThinking {
-  /** 可选档位（`reasoning_efforts` 的原值）。 */
-  levels: readonly string[];
-  /** 上游默认档位。 */
-  default?: string;
-}
-/** 一个暴露给 DSH 的模型。 */
-interface LoomyModelInfo {
-  /** 模型 id —— 与上游 wire id 相同（不做别名映射）。 */
-  id: string;
-  /** 展示名（上游 `name`，里面有 `x0.8` 这样的点数倍率）。 */
-  name: string;
-  contextWindow: number;
-  /** `contextWindow` 是上游真的给的，还是兜底值。卡片只在真值时印规格。 */
-  contextWindowKnown?: boolean;
-  maxTokens: number;
-  supportsImages: boolean;
-  /** 是不是思考模型（`capabilities.reasoning`）。 */
-  reasoning?: boolean;
-  /** 支持工具调用（`capabilities.function_calling`）。 */
-  toolCall?: boolean;
-  /** 上游声明支持流式（`capabilities.streaming`）。 */
-  streaming?: boolean;
-  /** 上游声明的思考档位。空/缺省 = 不显示推理档位选择器。 */
-  thinking?: LoomyModelThinking;
-  /** 点数倍率（上游 `name` 里的 `x0.8`）。只展示，不参与路由。 */
-  multiplier?: number;
-}
-/** 可变目录，由 shim 的 `/v1/models` 与适配器共享。 */
-declare class LoomyCatalog {
-  /** 空目录起步：没发现过就是没有模型。 */
-  private models;
-  current(): readonly LoomyModelInfo[];
-  set(models: readonly LoomyModelInfo[]): void;
-  /** 按 id 找一条（大小写不敏感，接受 `imodel/` 前缀）。 */
-  find(id: string): LoomyModelInfo | undefined;
-}
-/** 把目录收窄到用户勾选的子集（空/缺省 = 全给）。 */
-declare function filterEnabledModels(models: readonly LoomyModelInfo[], enabled: readonly string[] | undefined): readonly LoomyModelInfo[];
-/**
- * 合并多路来源（多账号）的模型清单。
- *
- * 规则：
- *  - 按 id 去重（大小写不敏感）；
- *  - 参数更全的一条优先（有真窗口 > 兜底窗口，支持图片 > 不支持）；
- *  - 输出按 id 排序，保证刷新前后顺序稳定。
- */
-declare function mergeModelLists(sets: readonly (readonly LoomyModelInfo[])[]): readonly LoomyModelInfo[];
-/**
  * 讯飞账号服务客户端：登录（密码 / 短信）、用户信息、登出。
  *
  * 与 DevEco 那种「浏览器授权 + 本机回环回调」完全不同，这里是**服务端直接登录**：
@@ -1328,8 +1371,8 @@ interface LoomyShimOptions {
   usage: LoomyUsageTracker;
   /** 点数缓存：「额度用尽」标记与余额读数。 */
   points: LoomyPointsTracker;
-  /** 用户勾选的模型（空 = 全给）。 */
-  enabledModels?: () => readonly string[] | undefined;
+  /** 用户勾选的模型（模式 + id；缺省全给）。 */
+  selection?: () => Selection;
   logger?: {
     debug: (message: string) => void;
     warn: (message: string, ...rest: unknown[]) => void;
@@ -1358,7 +1401,8 @@ declare const LOOMY_PROVIDER = "loomy";
 interface LoomyAdapterOptions {
   shim: LoomyShim;
   catalog: LoomyCatalog;
-  enabledModels?: () => readonly string[] | undefined;
+  /** 用户勾选的模型（模式 + id）；缺省全给。 */
+  selection?: () => Selection;
   resolveAttachments?: () => AttachmentStore | undefined;
 }
 interface LoomyAdapter {
@@ -1477,8 +1521,10 @@ declare const inject: string[];
 declare const LOOMY_SETTINGS_NS: SettingsNamespace;
 /** 插件配置。 */
 interface Config {
-  /** 模型选择器里允许出现的模型 id（空 = 全部）。 */
+  /** 模型选择器里允许出现的模型 id（`custom` 模式时生效；空 = 全部）。 */
   enabledModels?: string[];
+  /** 模型勾选模式：`all` 全部 / `none` 一个都不给 / `custom` 只给勾选的。 */
+  modelSelectionMode?: SelectionMode;
   /** 对话输入框下方的 `Provider Loomy · 模型 · 今日点数` 那一行。 */
   showDock?: boolean;
   /** 侧边栏图标列里的 Loomy 入口。缺省关：图标列是全宿主共用资源。 */
@@ -1498,4 +1544,4 @@ declare const Config: z<Config>;
 /** 点数说明（卡片直接展示，别让用户以为这是本机估算）。 */
 declare const POINTS_NOTE: string;
 declare function apply(ctx: Context, rawConfig: Config): void;
-export { type AccountPoints, type AccountRuntime, AccountService, Config, type DiscoveryOutcome, LOOMY_PROVIDER, LOOMY_SETTINGS_NS, LOOMY_VERSION, LoginError, type LoomyAccount, LoomyAccountPool, LoomyAccountStore, type LoomyAccountSummary, type LoomyAdapter, LoomyCatalog, type LoomyIdentity, type LoomyModelInfo, LoomyPointsTracker, LoomyQueueGate, type LoomyShim, LoomyUsageTracker, POINTS_NOTE, type PointsSnapshot, type PoolStrategy, type ShimStats, type UsageSnapshot, apply, buildAccountHeaders, createLoomyAdapter, createLoomyShim, discoverModels, fetchModels, filterEnabledModels, inject, looksLikeQuotaExhausted, loomyAccountsPath, loomyUsagePath, mergeModelLists, name, newIdentity, parseModelsPayload, parsePoints, refreshCatalog, rsaEncrypt, sign, stringToSign, summarizeAccount };
+export { type AccountPoints, type AccountRuntime, AccountService, Config, type DiscoveryOutcome, LOOMY_PROVIDER, LOOMY_SETTINGS_NS, LOOMY_VERSION, LoginError, type LoomyAccount, LoomyAccountPool, LoomyAccountStore, type LoomyAccountSummary, type LoomyAdapter, LoomyCatalog, type LoomyIdentity, type LoomyModelInfo, LoomyPointsTracker, LoomyQueueGate, type LoomyShim, LoomyUsageTracker, POINTS_NOTE, type PointsSnapshot, type PoolStrategy, type Selection, type SelectionMode, type ShimStats, type UsageSnapshot, apply, buildAccountHeaders, createLoomyAdapter, createLoomyShim, discoverModels, fetchModels, filterEnabledModels, inject, invertSelection, isSelectionMode, looksLikeQuotaExhausted, loomyAccountsPath, loomyUsagePath, mergeModelLists, name, newIdentity, normalizeSelection, parseModelsPayload, parsePoints, refreshCatalog, resolveSelection, rsaEncrypt, sign, stringToSign, summarizeAccount };
