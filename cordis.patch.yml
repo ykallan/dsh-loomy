@@ -1,0 +1,5 @@
+# 注册 Loomy provider，但不改动 profile 当前的默认模型。
+# 账号登录在设置卡片里完成（手机号+密码，服务端换 14 天会话），不需要额外的命令行工具。
+- insert:
+    - id: llm-loomy
+      name: dsh-loomy

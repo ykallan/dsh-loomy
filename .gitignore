@@ -1,0 +1,28 @@
+node_modules/
+coverage/
+*.log
+.DS_Store
+
+# 注意：lib/（构建产物）**入库**，便于直接安装与核对发布内容。
+# 改了源码仍要重新 `pnpm build`，否则宿主加载的是旧的 lib。
+
+# 插件自己的凭证与台账：**绝不提交**。
+.loomy-accounts.json
+.loomy-accounts.json.*
+.loomy-usage.json
+.loomy-refresh.log
+
+# 权限诊断脚本留下的报告（含 ACL 备份，不进仓库）。
+.acl-report/
+
+# 打包出来的 tarball（发布产物，不入库）。
+dist/
+
+# 部署/修复过程留下的备份。
+*.bak-*
+*.bak
+
+# 本地临时文件。
+.tmp-*
+*.tgz
+.pnpm-store/

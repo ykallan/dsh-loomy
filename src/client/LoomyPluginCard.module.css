@@ -1,0 +1,297 @@
+/*
+ * Loomy 卡片的样式。
+ *
+ * 只用宿主的主题令牌，且每个令牌都带兜底值：自定义属性写错名字不会报错，只会静默地
+ * 没有颜色，带 fallback 至少还能看出结构。
+ */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--dsw-alias-settings-card-stroke, rgba(127, 127, 127, 0.18));
+  border-radius: var(--dsw-radius-lg, 12px);
+  background: var(--dsw-alias-settings-card-fill, transparent);
+  color: var(--dsw-alias-label-primary, inherit);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.headerMain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--dsw-alias-label-tertiary, rgba(127, 127, 127, 0.9));
+  font-size: 12px;
+}
+
+.headerMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.tabs {
+  align-self: flex-start;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.signInBox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tokenInput {
+  flex: 1 1 220px;
+  min-width: 180px;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.accountRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-settings-card-stroke, rgba(127, 127, 127, 0.18));
+  border-radius: var(--dsw-radius-md, 8px);
+}
+
+.accountMain {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.accountTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.accountName {
+  font-weight: 600;
+}
+
+.accountMeta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--dsw-alias-label-tertiary, rgba(127, 127, 127, 0.9));
+  font-size: 12px;
+}
+
+.accountActions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.inlineForm {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.modelRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--dsw-radius-md, 8px);
+  cursor: pointer;
+}
+
+.modelRow:hover {
+  background: var(--dsw-alias-fill-secondary, rgba(127, 127, 127, 0.08));
+}
+
+.modelMain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.modelTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.modelName {
+  font-weight: 600;
+}
+
+.modelMeta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--dsw-alias-label-tertiary, rgba(127, 127, 127, 0.9));
+  font-size: 12px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.checkinRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--dsw-radius-md, 8px);
+  border: 1px solid var(--dsw-alias-settings-card-stroke, rgba(127, 127, 127, 0.18));
+}
+
+.switchRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.quotaBox {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--dsw-alias-settings-card-stroke, rgba(127, 127, 127, 0.18));
+  border-radius: var(--dsw-radius-md, 8px);
+}
+
+.quotaTitle {
+  font-weight: 600;
+}
+
+.quotaExhausted {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.note {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--dsw-radius-md, 8px);
+  background: var(--dsw-alias-fill-secondary, rgba(127, 127, 127, 0.08));
+  color: var(--dsw-alias-label-tertiary, rgba(127, 127, 127, 0.9));
+  font-size: 12px;
+}
+
+.muted {
+  color: var(--dsw-alias-label-tertiary, rgba(127, 127, 127, 0.9));
+  font-size: 12px;
+}
+
+.warnText {
+  color: var(--dsw-alias-status-warning, #d97706);
+  font-weight: 700;
+}
+
+.error {
+  padding: 8px 10px;
+  border-radius: var(--dsw-radius-md, 8px);
+  border: 1px solid var(--dsw-alias-status-danger, #dc2626);
+  color: var(--dsw-alias-status-danger, #dc2626);
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.notice {
+  padding: 8px 10px;
+  border-radius: var(--dsw-radius-md, 8px);
+  border: 1px solid var(--dsw-alias-status-success, #16a34a);
+  color: var(--dsw-alias-status-success, #16a34a);
+  font-size: 12px;
+}
+
+.footer {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid var(--dsw-alias-settings-card-stroke, rgba(127, 127, 127, 0.18));
+  color: var(--dsw-alias-label-secondary, inherit);
+  font-size: 12px;
+}
+
+.footerTitle {
+  font-weight: 600;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  height: 100%;
+  overflow: auto;
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.panelTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.dockLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dsw-alias-label-tertiary, rgba(127, 127, 127, 0.9));
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.dockSeparator {
+  opacity: 0.5;
+}

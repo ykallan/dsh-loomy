@@ -1,0 +1,8 @@
+# pnpm 11 把「允许哪些依赖跑 install 脚本」记在这里。
+#
+# @google/genai 与 protobufjs 是 pi-ai 的传递依赖，它们带 install 脚本。本插件不用这些脚本，
+# 也不打算替它们背书 —— 显式写成 false 表示「已知、故意不跑」。pnpm 因此不会把安装判失败，
+# 也不会在每次 `pnpm run` 前先跑一遍必然报错的 install。
+allowBuilds:
+  '@google/genai': false
+  protobufjs: false
