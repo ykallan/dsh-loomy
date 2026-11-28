@@ -86,6 +86,16 @@ declare const zh: {
   pointsExhaustedTag: string;
   pointsExhaustedNotice: string;
   pointsNote: string;
+  checkinNow: string;
+  checkinRunning: string;
+  checkinNote: string;
+  checkinClaimed: string;
+  checkinClaimedGained: string;
+  checkinDone: string;
+  checkinUnknown: string;
+  checkinSkipped: string;
+  checkinFailed: string;
+  checkinWhen: string;
   displayReadonly: string;
   showDock: string;
   showSidebar: string;

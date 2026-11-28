@@ -16,6 +16,7 @@ import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { Button, Checkbox, Input, SegmentedTabs, StateDot, Switch, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SegmentedTab, StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
+  CheckinSummary,
   LoomyDockFlags,
   LoomyModelSelection,
   LoomyWebAccount,
@@ -66,6 +67,28 @@ function statusOfDot(account: LoomyWebAccount): StateDotState {
   if (account.needsLogin) return 'error'
   if (account.slot?.coolUntil !== undefined && account.slot.coolUntil > Date.now()) return 'warning'
   return 'done'
+}
+
+/**
+ * 签到结果 → 文案。
+ *
+ * 上游的 `first-login` 按天幂等，「今天已刷过」和「这次刷上了」是两件事，卡片照实分开说，
+ * 不把 `alreadyProcessed` 当成「刚签到成功」来邀功。
+ */
+function checkinLabel(
+  checkin: LoomyWebAccount['checkin'],
+  t: LoomyPluginCardInjected['t'],
+): string | undefined {
+  if (checkin?.outcome === undefined) return undefined
+  if (checkin.outcome === 'claimed') {
+    return checkin.gained === undefined
+      ? t('checkinClaimed')
+      : t('checkinClaimedGained', { points: formatCount(checkin.gained) })
+  }
+  if (checkin.outcome === 'done') return t('checkinDone')
+  if (checkin.outcome === 'skipped') return t('checkinSkipped')
+  if (checkin.outcome === 'failed') return t('checkinFailed', { message: checkin.message ?? 'unknown' })
+  return t('checkinUnknown')
 }
 
 type AccountAction =
@@ -494,6 +517,24 @@ export function LoomyPluginCard({ t }: LoomyPluginCardInjected): ReactElement {
     }
   }
 
+  /** 「立即签到」：重跑一轮启动签到（上游按天幂等，重复调用不会多领）。 */
+  const checkinNow = async (): Promise<void> => {
+    setBusy('checkin')
+    try {
+      const result = await requestJson<{ outcome: CheckinSummary; status: LoomyWebStatus }>(
+        '/api/loomy/checkin',
+        { method: 'POST', body: '{}' },
+      )
+      setStatus(result.status)
+      setNotice(result.outcome.message)
+      setError(result.outcome.failed > 0 ? result.outcome.message : undefined)
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : String(caught))
+    } finally {
+      setBusy(undefined)
+    }
+  }
+
   /** 体检：读一次 /doctor，把结果写进 notice/error。 */
   const diagnose = async (): Promise<void> => {
     setBusy('doctor')
@@ -702,6 +743,9 @@ export function LoomyPluginCard({ t }: LoomyPluginCardInjected): ReactElement {
               <Button variant="outline" size="sm" disabled={busy === 'points'} onClick={() => void refreshPoints()}>
                 {busy === 'points' ? t('pointsRefreshing') : t('pointsRefresh')}
               </Button>
+              <Button variant="outline" size="sm" disabled={busy === 'checkin'} onClick={() => void checkinNow()}>
+                {busy === 'checkin' ? t('checkinRunning') : t('checkinNow')}
+              </Button>
             </div>
             {exhausted.length === 0 ? null : (
               <div className={styles.quotaExhausted}>
@@ -715,6 +759,7 @@ export function LoomyPluginCard({ t }: LoomyPluginCardInjected): ReactElement {
               </div>
             )}
             <p className={styles.note}>{t('pointsNote')}</p>
+            <p className={styles.note}>{t('checkinNote')}</p>
           </div>
           {accounts.length === 0 ? <p className={styles.muted}>{t('signedOut')}</p> : (
             <div className={styles.list}>
@@ -740,6 +785,14 @@ export function LoomyPluginCard({ t }: LoomyPluginCardInjected): ReactElement {
                     <span className={styles.muted}>
                       {state?.checkedAt === undefined ? '' : t('pointsChecked', { when: formatWhen(state.checkedAt) })}
                     </span>
+                    {account.checkin?.outcome === undefined ? null : (
+                      <span className={account.checkin.outcome === 'failed' ? styles.warnText : styles.muted}>
+                        {checkinLabel(account.checkin, t)}
+                        {account.checkin.at === undefined
+                          ? ''
+                          : ` · ${t('checkinWhen', { when: formatWhen(account.checkin.at) })}`}
+                      </span>
+                    )}
                     {state?.error === undefined ? null : (
                       <span className={styles.warnText}>{t('pointsError', { message: state.error })}</span>
                     )}

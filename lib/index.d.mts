@@ -1410,6 +1410,129 @@ interface LoomyAdapter {
   invalidate: () => void;
 }
 declare function createLoomyAdapter(options: LoomyAdapterOptions): LoomyAdapter;
+/** 一个账号这一轮签到发生了什么。 */
+type CheckinOutcome =
+/** 今天的每日赠送是这次刷新的（余额可见地涨了，或应答明确说今天第一次）。 */
+'claimed' |
+/** 今天已经刷过（`alreadyProcessed`）或余额没有变化。 */
+'done' |
+/** 请求成功，但没有可用的判据。宁可说不知道，也不谎报签到成功。 */
+'unknown' |
+/** 没有可用会话（待登录/暂停），压根没发请求。 */
+'skipped' |
+/** 请求失败（网络、401、业务错误码）。 */
+'failed';
+/** `POST /points/first-login` 的应答里我们能确认的字段。 */
+interface FirstLoginResult {
+  /** `true` = 今天已经刷过（幂等命中）；`false` = 这次就是今天第一次。 */
+  alreadyProcessed?: boolean;
+  /** 业务码；`000000` 才是成功。 */
+  code?: string;
+  /** 业务说明（失败原因）。 */
+  message?: string;
+}
+/** 卡片上的签到状态（一个账号一份）。 */
+interface AccountCheckin {
+  /** 最近一次尝试的时刻（epoch ms）。 */
+  at?: number;
+  outcome?: CheckinOutcome;
+  /** 这次刷出来的每日赠送增量（只有量得到、且大于 0 时才有）。 */
+  gained?: number;
+  /** 签到后查到的每日赠送余额。 */
+  dailyBalance?: number;
+  /** 失败原因或补充说明。 */
+  message?: string;
+}
+/**
+ * 解析签到应答。
+ *
+ * 成功信封是 `{code, desc, data}`；`alreadyProcessed` 可能挂在 `data` 里也可能在顶层
+ * （两个公开实现都这么读），所以两处都认。**认不出就不猜**：缺字段就是 `undefined`。
+ */
+declare function parseFirstLogin(raw: unknown): FirstLoginResult;
+/** `fetchFirstLogin` 的可注入项（测试用假上游）。 */
+interface FirstLoginOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+}
+/**
+ * 发一次签到请求。
+ *
+ * 请求头与点数查询完全一致（`Authorization` + `token` + `traceparent` + `loomy-version`），
+ * 请求体是 `{}` —— 上游只需要会话，不需要别的参数。
+ */
+declare function fetchFirstLogin(session: string, options?: FirstLoginOptions): Promise<FirstLoginResult>;
+/**
+ * 把「应答 + 每日赠送差额」翻译成一个结论。
+ *
+ * 优先级：应答明说 `alreadyProcessed` > 余额差额 > 应答明说「今天第一次」 > 不知道。
+ */
+declare function classifyCheckin(result: FirstLoginResult, gained: number | undefined): CheckinOutcome;
+/** 一个账号的签到状态缓存。 */
+declare class LoomyCheckinTracker {
+  private readonly accounts;
+  /** 记一次尝试（同一账号只保留最近一次）。 */
+  note(id: string, entry: AccountCheckin): void;
+  state(id: string): AccountCheckin | undefined;
+  snapshot(): Record<string, AccountCheckin>;
+  /** 清掉已删除账号的状态。 */
+  prune(ids: readonly string[]): void;
+  clear(): void;
+}
+/** 一整轮签到的依赖（全部显式注入，测试可以完全离线）。 */
+interface CheckinPassOptions {
+  /** 要签到的账号 id（调用方决定：通常是不暂停、不待登录的那些）。 */
+  ids: readonly string[];
+  /** 解析一个账号的可用会话（必要时由账号层静默重登）。 */
+  resolveSession: (id: string) => Promise<string | undefined>;
+  /**
+   * 签到被上游判「会话失效」时的一次重登机会（返回新会话）。
+   *
+   * 上游对死会话也回 HTTP 200 + 业务码 `100002`，`resolve()` 光看本地到期时间是发现不了
+   * 的 —— 没有这个钩子，启动签到会在「会话被提前吊销」的账号上静默失败，直到下次聊天请求
+   * 才自愈。实现方应走账号层已有的「单飞重登」，不要自己再写一套登录。
+   */
+  refreshSession?: (id: string, reason: string) => Promise<string | undefined>;
+  /** 签到前缓存的点数快照（用来算每日赠送差额）；拿不到就不算。 */
+  cachedPoints?: (id: string) => PointsSnapshot | undefined;
+  /** 签到后用点数查询刷新余额（同时给卡片提供最新数字）。 */
+  points: LoomyPointsTracker;
+  tracker: LoomyCheckinTracker;
+  firstLoginImpl?: (session: string, options?: FirstLoginOptions) => Promise<FirstLoginResult>;
+  fetchPointsImpl?: (session: string, options?: {
+    signal?: AbortSignal;
+  }) => Promise<PointsSnapshot>;
+  /** 失败原因写插件自己的日志（宿主没有 info/debug 出口，见 `index.ts`）。 */
+  log?: (message: string) => void;
+  signal?: AbortSignal;
+  now?: () => number;
+  gapMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+/** 一轮签到的汇总（给卡片与日志），图形与别处的 `PointsRefreshResult` 保持一致。 */
+interface CheckinSummary {
+  attempted: number;
+  claimed: number;
+  done: number;
+  unknown: number;
+  failed: number;
+  skipped: number;
+  accounts: {
+    id: string;
+    outcome: CheckinOutcome;
+    message?: string;
+    gained?: number;
+  }[];
+  message: string;
+}
+/**
+ * 逐个账号签到。
+ *
+ * 串行 + 小间隔：账号服务与网关对并发登录比较敏感，而且签到本身不着急。单个账号失败
+ * **绝不**中断整轮 —— 其余账号的每日额度还是要刷的。
+ */
+declare function runCheckinPass(options: CheckinPassOptions): Promise<CheckinSummary>;
 /** 一次目录抓取的结果。 */
 interface CatalogFetch {
   models: readonly LoomyModelInfo[];
@@ -1539,9 +1662,11 @@ interface Config {
   strategy?: PoolStrategy;
   /** 会话快到期时自动用存着的密码重登。 */
   autoRenew?: boolean;
+  /** 每次宿主启动时给每个可用账号触发一次签到（上游 `first-login`，按天幂等）。 */
+  checkinOnStart?: boolean;
 }
 declare const Config: z<Config>;
 /** 点数说明（卡片直接展示，别让用户以为这是本机估算）。 */
 declare const POINTS_NOTE: string;
 declare function apply(ctx: Context, rawConfig: Config): void;
-export { type AccountPoints, type AccountRuntime, AccountService, Config, type DiscoveryOutcome, LOOMY_PROVIDER, LOOMY_SETTINGS_NS, LOOMY_VERSION, LoginError, type LoomyAccount, LoomyAccountPool, LoomyAccountStore, type LoomyAccountSummary, type LoomyAdapter, LoomyCatalog, type LoomyIdentity, type LoomyModelInfo, LoomyPointsTracker, LoomyQueueGate, type LoomyShim, LoomyUsageTracker, POINTS_NOTE, type PointsSnapshot, type PoolStrategy, type Selection, type SelectionMode, type ShimStats, type UsageSnapshot, apply, buildAccountHeaders, createLoomyAdapter, createLoomyShim, discoverModels, fetchModels, filterEnabledModels, inject, invertSelection, isSelectionMode, looksLikeQuotaExhausted, loomyAccountsPath, loomyUsagePath, mergeModelLists, name, newIdentity, normalizeSelection, parseModelsPayload, parsePoints, refreshCatalog, resolveSelection, rsaEncrypt, sign, stringToSign, summarizeAccount };
+export { type AccountCheckin, type AccountPoints, type AccountRuntime, AccountService, type CheckinOutcome, type CheckinSummary, Config, type DiscoveryOutcome, type FirstLoginResult, LOOMY_PROVIDER, LOOMY_SETTINGS_NS, LOOMY_VERSION, LoginError, type LoomyAccount, LoomyAccountPool, LoomyAccountStore, type LoomyAccountSummary, type LoomyAdapter, LoomyCatalog, LoomyCheckinTracker, type LoomyIdentity, type LoomyModelInfo, LoomyPointsTracker, LoomyQueueGate, type LoomyShim, LoomyUsageTracker, POINTS_NOTE, type PointsSnapshot, type PoolStrategy, type Selection, type SelectionMode, type ShimStats, type UsageSnapshot, apply, buildAccountHeaders, classifyCheckin, createLoomyAdapter, createLoomyShim, discoverModels, fetchFirstLogin, fetchModels, filterEnabledModels, inject, invertSelection, isSelectionMode, looksLikeQuotaExhausted, loomyAccountsPath, loomyUsagePath, mergeModelLists, name, newIdentity, normalizeSelection, parseFirstLogin, parseModelsPayload, parsePoints, refreshCatalog, resolveSelection, rsaEncrypt, runCheckinPass, sign, stringToSign, summarizeAccount };

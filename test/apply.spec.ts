@@ -177,6 +177,7 @@ describe('apply()', () => {
       const paths = routes.map(route => route.path).sort()
       expect(paths).toEqual([
         '/api/loomy/accounts',
+        '/api/loomy/checkin',
         '/api/loomy/dock',
         '/api/loomy/doctor',
         '/api/loomy/enabled-models',
@@ -215,7 +216,7 @@ describe('apply()', () => {
     const { ctx, routes, dispose } = fakeContext()
     apply(ctx as never, {})
     try {
-      await waitFor(() => routes.length === 12)
+      await waitFor(() => routes.length === 13)
       const route = routes.find(entry => entry.path === '/api/loomy/status')
       expect(route).toBeDefined()
 
@@ -266,7 +267,7 @@ describe('apply()', () => {
     const { ctx, routes, dispose } = fakeContext()
     apply(ctx as never, {})
     try {
-      await waitFor(() => routes.length === 12)
+      await waitFor(() => routes.length === 13)
       const route = routes.find(entry => entry.path === '/api/loomy/status')
       const res = fakeRes()
       await route?.handler(fakeReq({ headers: { host: 'evil.example.com' } }), res)
@@ -281,7 +282,7 @@ describe('apply()', () => {
     const { ctx, routes, dispose } = fakeContext()
     apply(ctx as never, {})
     try {
-      await waitFor(() => routes.length === 12)
+      await waitFor(() => routes.length === 13)
       const route = routes.find(entry => entry.path === '/api/loomy/status')
       const res = fakeRes()
       await route?.handler(fakeReq({ headers: { host: '127.0.0.1:58852', origin: 'https://evil.example.com' } }), res)
@@ -296,7 +297,7 @@ describe('apply()', () => {
     const { ctx, routes, dispose } = fakeContext()
     apply(ctx as never, {})
     try {
-      await waitFor(() => routes.length === 12)
+      await waitFor(() => routes.length === 13)
       const route = routes.find(entry => entry.path === '/api/loomy/dock')
       const res = fakeRes()
       await route?.handler(fakeReq({ method: 'POST', url: '/api/loomy/dock', headers: { host: '127.0.0.1:58852' } }), res)
@@ -311,7 +312,7 @@ describe('apply()', () => {
     const { ctx, routes, dispose } = fakeContext()
     apply(ctx as never, {})
     try {
-      await waitFor(() => routes.length === 12)
+      await waitFor(() => routes.length === 13)
       const route = routes.find(entry => entry.path === '/api/loomy/login')
       const res = fakeRes()
       await route?.handler(fakeReq({
@@ -331,7 +332,7 @@ describe('apply()', () => {
     const { ctx, routes, dispose } = fakeContext()
     apply(ctx as never, {})
     try {
-      await waitFor(() => routes.length === 12)
+      await waitFor(() => routes.length === 13)
       const route = routes.find(entry => entry.path === '/api/loomy/accounts')
       const res = fakeRes()
       await route?.handler(fakeReq({
@@ -351,7 +352,7 @@ describe('apply()', () => {
     const { ctx, routes, dispose } = fakeContext()
     apply(ctx as never, {})
     try {
-      await waitFor(() => routes.length === 12)
+      await waitFor(() => routes.length === 13)
       const route = routes.find(entry => entry.path === '/api/loomy/doctor')
       let parsed: { report: { ok: boolean; checks: { id: string; ok: boolean }[] } } = { report: { ok: true, checks: [] } }
       for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -374,7 +375,7 @@ describe('apply()', () => {
     const { ctx, routes, settingsWrites, dispose } = fakeContext()
     apply(ctx as never, {})
     try {
-      await waitFor(() => routes.length === 12)
+      await waitFor(() => routes.length === 13)
       const route = routes.find(entry => entry.path === '/api/loomy/enabled-models')
       const post = async (body: unknown): Promise<FakeResponse> => {
         const res = fakeRes()
@@ -418,7 +419,7 @@ describe('apply()', () => {
     // 升级前存下来的配置只有 enabledModels，没有模式键。
     apply(ctx as never, { enabledModels: ['spark-x'] })
     try {
-      await waitFor(() => routes.length === 12)
+      await waitFor(() => routes.length === 13)
       const route = routes.find(entry => entry.path === '/api/loomy/enabled-models')
       const res = fakeRes()
       await route?.handler(fakeReq(), res)
@@ -435,7 +436,7 @@ describe('apply()', () => {
     const { ctx, routes, settingsWrites, dispose } = fakeContext()
     apply(ctx as never, {})
     try {
-      await waitFor(() => routes.length === 12)
+      await waitFor(() => routes.length === 13)
       const route = routes.find(entry => entry.path === '/api/loomy/selection/invert')
       expect(route).toBeDefined()
 
@@ -471,6 +472,45 @@ describe('apply()', () => {
         body: '{}',
       }), foreign)
       expect(foreign.status).toBe(403)
+    } finally {
+      dispose()
+    }
+  })
+
+  it('runs a check-in round through the checkin route', async () => {
+    tempHome()
+    const { ctx, routes, dispose } = fakeContext()
+    apply(ctx as never, {})
+    try {
+      await waitFor(() => routes.length === 13)
+      const route = routes.find(entry => entry.path === '/api/loomy/checkin')
+      expect(route).toBeDefined()
+
+      const post = async (headers: Record<string, string>): Promise<FakeResponse> => {
+        const res = fakeRes()
+        await route?.handler(fakeReq({
+          method: 'POST',
+          url: '/api/loomy/checkin',
+          headers,
+          body: '{}',
+        }), res)
+        return res
+      }
+
+      // 没有账号时跑一轮是空结果，而不是报错 —— 启动签到走的就是这条路径。
+      const res = await post({ host: '127.0.0.1:58852', 'content-type': 'application/json' })
+      expect(res.status).toBe(200)
+      const parsed = JSON.parse(res.body ?? '{}') as {
+        outcome: { attempted: number; message: string }
+        status: { accounts: unknown[] }
+      }
+      expect(parsed.outcome.attempted).toBe(0)
+      expect(parsed.outcome.message).toMatch(/no account/i)
+      expect(parsed.status.accounts).toEqual([])
+
+      // 写操作必须带 JSON content-type。
+      const plain = await post({ host: '127.0.0.1:58852' })
+      expect(plain.status).toBe(415)
     } finally {
       dispose()
     }

@@ -99,6 +99,12 @@ export const MODEL_PATHS = {
   models: '/models',
   chat: '/chat/completions',
   points: '/points/records',
+  /**
+   * 每日签到。名字叫 `first-login`，实际语义是「开始今天的计费周期」：把每日赠送
+   * 续满，同一个自然日内重复调用幂等（应答里 `alreadyProcessed: true`）。
+   * 官方客户端每次登录都会发这一次请求（`docs/PROTOCOL.md` 第 5 节）。
+   */
+  firstLogin: '/points/first-login',
 } as const
 
 /** 聊天请求的用途标记（上游按它记点数）。 */

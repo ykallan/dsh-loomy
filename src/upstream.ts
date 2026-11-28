@@ -59,6 +59,11 @@ export function pointsUrl(pageSize = 1): string {
   return `${modelBase()}${MODEL_PATHS.points}?record_type=all&page_no=1&page_size=${String(pageSize)}`
 }
 
+/** 每日签到地址（`POST {}`，按天幂等）。 */
+export function firstLoginUrl(): string {
+  return `${modelBase()}${MODEL_PATHS.firstLogin}`
+}
+
 /** 上游错误的归类。 */
 export type UpstreamErrorKind =
   | 'auth'

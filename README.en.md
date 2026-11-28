@@ -24,6 +24,7 @@ catalog and a local usage ledger.
 | Points-aware routing | the upstream really does report a ledger (`/points/records`), so the default strategy is "most points first"; `round_robin` and `lru` are available |
 | Dynamic catalog | `GET /models` on startup and hourly, unioned across accounts; optionally expose only the models you check |
 | Honest points | the card shows `available = permanent balance + daily grant`. No reset countdown is invented — the upstream does not publish one |
+| Daily check-in | every DSH start sends one upstream `first-login` per usable account: idempotent per day, it only refills the daily grant (repeating it grants nothing extra and costs no points). Per-account results are on the card, with a manual "Check in now" |
 | Local ledger | requests, tokens and the **actual points charged** (`usage.points_consumed`) for this machine only |
 | Request validation | the upstream silently falls back to its default model for an unknown id, so the plugin validates against the catalog and answers `400` instead |
 | Concurrency | 1 in flight + up to 3 queued by default; beyond that a plain `429` |
@@ -56,7 +57,9 @@ afterwards.
 3. **More accounts** — add as many as you like. Pin the one you want first, pause the rest.
    An account whose session dies is renewed automatically when a password is stored, and marked
    *needs sign-in* otherwise.
-4. **Points** — the Points tab refreshes the real ledger per account.
+4. **Points** — the Points tab refreshes the real ledger per account and shows each account's
+   latest check-in; if the startup check-in missed (e.g. the network was down), press
+   **Check in now**.
 5. **Pick models** — check them one by one on the Models tab, or use **Select all** / **Invert**.
    Invert is the true complement: all → none, none → all, partial → the rest; pressing it twice
    returns to where you started. "None" is a real state (Loomy disappears from the picker) and is
@@ -69,6 +72,10 @@ afterwards.
 - They are **not** local usage. "Today" in the footer only counts what this machine spent
   through this plugin.
 - The daily grant's reset moment is **not published**, so no countdown is shown.
+- **Check-in is `POST /points/first-login`** (the official client sends it after every login).
+  There is no separate check-in endpoint, and it is not a "+5000 points" grant: it starts
+  today's billing cycle and refills the daily grant. It is idempotent per day and answers
+  `alreadyProcessed: true` when today's grant was already refreshed.
 - Each request costs `multiplier ×` points (`x0.1` … `x12.0`, shown on every model row); the
   exact charge comes back as `usage.points_consumed`.
 
@@ -85,6 +92,7 @@ afterwards.
 | `maxQueue` | `3` | local queue depth before a `429` |
 | `strategy` | `balance` | `balance` / `round_robin` / `lru` |
 | `autoRenew` | `true` | renew sessions with the stored password before they expire |
+| `checkinOnStart` | `true` | trigger the daily check-in (upstream `first-login`, idempotent per day) for every usable account on each host start |
 
 Environment: `LOOMY_UPSTREAM`, `LOOMY_ACCOUNT_BASE`, `LOOMY_AK_ID` / `LOOMY_AK_SECRET`,
 `LOOMY_IDENTITY_MODE` (`per_account` by default, or `client` to mirror the shipped client's

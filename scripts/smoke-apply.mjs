@@ -78,7 +78,7 @@ const check = (label, ok, detail = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'} ${label}${detail === '' ? '' : ` — ${detail}`}`)
 }
 
-check('12 routes registered', routes.length === 12, String(routes.length))
+check('13 routes registered', routes.length === 13, String(routes.length))
 check('adapter registered for loomy', JSON.stringify(adapters) === '[["loomy"]]', JSON.stringify(adapters))
 check('directory entry registered', directory.length === 1)
 
@@ -130,6 +130,26 @@ check(
   'invert stores the mode next to the ids',
   settingsWrites.at(-1) !== undefined && 'modelSelectionMode' in settingsWrites.at(-1),
   JSON.stringify(settingsWrites.at(-1) ?? null),
+)
+
+const checkinRoute = routes.find(route => route.path === '/api/loomy/checkin')
+check('checkin route is mounted', checkinRoute !== undefined)
+const checked = { writeHead(status) { this.status = status }, end(payload) { this.body = payload }, on() {}, off() {} }
+await checkinRoute.handler({
+  method: 'POST',
+  url: '/api/loomy/checkin',
+  headers: { host: '127.0.0.1:58852', 'content-type': 'application/json' },
+  on(event, handler) {
+    if (event === 'data') handler(Buffer.from('{}'))
+    if (event === 'end') handler()
+  },
+  destroy() {},
+}, checked)
+check('checkin answers 200 with an empty round', checked.status === 200, String(checked.status))
+check(
+  'checkin reports no account',
+  JSON.parse(checked.body ?? '{}').outcome?.attempted === 0,
+  String(JSON.parse(checked.body ?? '{}').outcome?.attempted),
 )
 
 for (const dispose of disposers) {

@@ -34,6 +34,7 @@ src/accounts.ts     账号文档；单账号会话解析（单飞 + 代际 + 冷
 src/catalog.ts      模型目录的数据结构、合并、勾选过滤
 src/discovery.ts    GET /models 的抓取与解析（多账号并集）；探活
 src/points.ts       GET /points/records → 余额/每日赠送；「额度用尽」标记
+src/checkin.ts      每日签到 = POST /points/first-login（按天幂等）+ 本轮结果追踪
 src/account-pool.ts 谁现在能接活（点数/轮转/LRU + 槽位/冷却/暂停/置顶）
 src/queue.ts        全局并发闸门（1 在飞 + 最多 3 排队 + 入场冷却）
 src/upstream.ts     模型网关这一层：请求头（traceparent 是硬要求）/ 错误归类 / 用量抽取
@@ -63,6 +64,11 @@ src/client/*        浏览器侧：卡片、底部状态行、侧边栏页
 - **额度用尽与「服务过载」不是一回事**：只有 `402` / 点数文案才记成额度用尽并冷却；
   `5xx` 只做短时退避。响应码也要如实传：一个 402 不能被换成一个笼统的 429。
 - **不要编造每日赠送的重置时刻**：上游没有公开，卡片只显示数值。
+- **签到就是 `POST /points/first-login`，别发明新端点**：它按天幂等，应答 `alreadyProcessed`
+  只表示「今天已经刷过」。不要把 `alreadyProcessed` 说成「刚签到成功」，也不要解析一个
+  上游没承诺的「赠送额」—— 量不到就说 unknown。
+- **`first-login` 用 HTTP 200 + 业务码报错**：死会话是 `code: "100002"`（登录已失效），不是
+  401。只看 HTTP 状态会把「会话失效」当成签到成功。
 
 ## 测试口味
 

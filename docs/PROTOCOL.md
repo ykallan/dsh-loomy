@@ -121,9 +121,29 @@ Endpoints used here:
 | `GET /models` | `{object:"list", data:[{id, name, context_length, max_output_tokens, capabilities{reasoning,vision,function_calling,streaming}, reasoning_efforts}]}` |
 | `POST /chat/completions` | OpenAI-compatible; `stream: true` on the **same** path; the final SSE chunk carries `usage`, including `points_consumed` |
 | `GET /points/records?record_type=all&page_no=1&page_size=1` | `data.{balance, dailyBalance, availableBalance, list[]}` |
+| `POST /points/first-login` | body `{}`. Starts today's billing cycle and refills the daily grant. **Idempotent per day**: the answer carries `alreadyProcessed: true` when today's grant is already refreshed. This is the "check-in" the official client sends right after login. |
 
 Not used, but present upstream: `/images/generations`, `/embeddings`, `/search/tencent`,
-`/team-points/balance`, `/points/first-login`, `/points/activation`.
+`/team-points/balance`, `/points/activation`.
+
+### The daily check-in is `first-login`
+
+There is **no dedicated check-in endpoint**. "签到" is exactly `POST /points/first-login`, the
+single request the official client fires after every login. Its name is misleading: it is not
+"first login ever", it is "start today's billing cycle". Notes that matter:
+
+- It is **not** a "+5000 points" grant. The daily grant is refilled up to its quota; calling it
+  again the same day returns `alreadyProcessed: true` and changes nothing. It costs no points.
+- A dead session is **not** a `401` here: the endpoint answers **HTTP 200** with
+  `{"code":"100002","desc":"登录已失效，请重新登录","trace_id":"…","data":{}}` (verified against
+  the live gateway). Clients must read the business code, not just the HTTP status.
+- The upstream does not document the exact arithmetic in the answer (`dailyQuota − dailyConsumed`
+  appears in some builds). This plugin therefore **does not parse a granted amount**: it compares
+  `dailyBalance` from `/points/records` before and after, and reports "unknown" when neither the
+  delta nor `alreadyProcessed` is available rather than claiming a check-in.
+- Two independent implementations were used to confirm the path, the empty body and the
+  `alreadyProcessed` flag: `magpie-community/plugins` (`packages/loomy`) and the Loomy section of
+  `anye-99/dsh-codearts-auth`.
 
 ### Unknown model ids are silently rewritten
 
@@ -152,6 +172,7 @@ What is observable:
 | Observable | Source | Used for |
 |---|---|---|
 | remaining points | `GET /points/records` | the card, and `balance` account selection |
+| daily grant refilled | `POST /points/first-login` + the `dailyBalance` delta | the startup check-in (`src/checkin.ts`); `alreadyProcessed` means "already done today" |
 | points this turn | `usage.points_consumed` | the local usage ledger |
 | "out of points" | `402`, or `insufficient` / `点数不足` wording | per-account cooldown + failover |
 

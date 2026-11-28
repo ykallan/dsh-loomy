@@ -95,6 +95,19 @@ export const zh = {
     '这是上游账本里的账号级点数：可用 = 永久余额 + 每日赠送。每日赠送什么时候重置由上游决定，'
     + '这里不编倒计时。下面的「今日」只统计本机经这个插件花掉的量。',
 
+  checkinNow: '立即签到',
+  checkinRunning: '签到中…',
+  checkinNote:
+    '每次打开 DSH 都会先给每个可用账号发一次签到（上游 first-login）：按天幂等，'
+    + '只负责把每日赠送续满，重复调用不会多领，也不扣点数。下面是最近一次的结果。',
+  checkinClaimed: '每日额度已刷新',
+  checkinClaimedGained: '签到成功 · +{points}',
+  checkinDone: '今天已经签过',
+  checkinUnknown: '已发请求，结果未知',
+  checkinSkipped: '未签到（没有可用会话）',
+  checkinFailed: '签到失败：{message}',
+  checkinWhen: '{when} 签到',
+
   displayReadonly: '当前宿主没有可写的设置服务，开关只读。',
   showDock: '对话输入框下方的 Loomy 状态行',
   showSidebar: '侧边栏图标列里的 Loomy 入口',
@@ -215,6 +228,20 @@ export const en: Record<keyof LoomySettingsKey, string> = {
     'These are the account-level points the upstream ledger reports: available = permanent balance + daily grant. '
     + 'The daily grant resets on the upstream side, so no countdown is invented here. "Today" below only counts '
     + 'what this machine spent through this plugin.',
+
+  checkinNow: 'Check in now',
+  checkinRunning: 'Checking in…',
+  checkinNote:
+    'Every time DSH starts, each usable account gets one check-in (the upstream first-login): it is idempotent '
+    + 'per day and only refills the daily grant — repeating it neither grants more nor costs points. '
+    + 'The latest result is shown below.',
+  checkinClaimed: 'daily grant refreshed',
+  checkinClaimedGained: 'checked in · +{points}',
+  checkinDone: 'already checked in today',
+  checkinUnknown: 'requested; outcome unknown',
+  checkinSkipped: 'not checked in (no usable session)',
+  checkinFailed: 'check-in failed: {message}',
+  checkinWhen: 'check-in {when}',
 
   displayReadonly: 'This host has no writable settings service, so the switches are read-only.',
   showDock: 'Loomy status line under the chat input',

@@ -31,6 +31,7 @@ import { LoomyCatalog, invertSelection as invertModelSelection, normalizeSelecti
 import { refreshCatalog } from './discovery.ts'
 import { LoomyUsageTracker } from './usage.ts'
 import { LoomyPointsTracker, fetchPoints, looksLikeQuotaExhausted, type PointsSnapshot } from './points.ts'
+import { LoomyCheckinTracker, runCheckinPass, type CheckinSummary } from './checkin.ts'
 import { createLoomyShim, type ShimStats } from './shim.ts'
 import { createLoomyAdapter, LOOMY_PROVIDER } from './adapter.ts'
 import { installSettingsSectionCompat, resolveSettingsNamespaceCompat } from './settings-compat.ts'
@@ -65,6 +66,17 @@ export {
 } from './accounts.ts'
 export { LoomyAccountPool, type AccountRuntime, type PoolStrategy } from './account-pool.ts'
 export { LoomyUsageTracker, type UsageSnapshot } from './usage.ts'
+export {
+  LoomyCheckinTracker,
+  classifyCheckin,
+  fetchFirstLogin,
+  parseFirstLogin,
+  runCheckinPass,
+  type AccountCheckin,
+  type CheckinOutcome,
+  type CheckinSummary,
+  type FirstLoginResult,
+} from './checkin.ts'
 export {
   LoomyPointsTracker,
   parsePoints,
@@ -108,6 +120,8 @@ export interface Config {
   strategy?: PoolStrategy
   /** 会话快到期时自动用存着的密码重登。 */
   autoRenew?: boolean
+  /** 每次宿主启动时给每个可用账号触发一次签到（上游 `first-login`，按天幂等）。 */
+  checkinOnStart?: boolean
 }
 
 interface VolatileValue<T> {
@@ -159,6 +173,9 @@ export const Config: z<Config> = z.object({
   autoRenew: z.boolean().default(true)
     .description('Sign in again with the stored password before the 14-day session expires')
     .volatile(),
+  checkinOnStart: z.boolean().default(true)
+    .description('Trigger the daily check-in (upstream first-login) for every usable account whenever the host starts')
+    .volatile(),
 }) as unknown as z<Config>
 
 /** 点数说明（卡片直接展示，别让用户以为这是本机估算）。 */
@@ -194,6 +211,7 @@ export function apply(ctx: Context, rawConfig: Config): void {
   }
 
   const points = new LoomyPointsTracker()
+  const checkins = new LoomyCheckinTracker()
   const store = new LoomyAccountStore(loomyAccountsPath(), {
     log: appendRefreshLog,
     // `per_account`（缺省）给每个号一个独立的 devid；`client` 则逐字照抄客户端的 `web`。
@@ -262,8 +280,9 @@ export function apply(ctx: Context, rawConfig: Config): void {
     pool.setPaused(summaries.filter(entry => entry.paused).map(entry => entry.id))
     pool.setPreferred(summaries.filter(entry => entry.pinned).map(entry => entry.id))
     pool.setStrategy(current().strategy ?? 'balance')
-    // 被删掉的账号不该继续占着点数缓存。
+    // 被删掉的账号不该继续占着点数/签到缓存。
     points.prune(ids)
+    checkins.prune(ids)
   }
 
   /**
@@ -313,6 +332,51 @@ export function apply(ctx: Context, rawConfig: Config): void {
     }
   }
 
+  /**
+   * 给每个可用账号发一次签到（上游 `first-login`，按天幂等）。
+   *
+   * 每次宿主启动跑一轮，卡片上的「立即签到」也走这里。同一时刻只允许一轮：连点两次按钮
+   * 不该把同一批账号打两遍。失败不抛给调用方 —— 单个账号的错误已经记进 tracker 与日志。
+   */
+  let checkinInflight: Promise<CheckinSummary> | undefined
+  const checkinAll = (): Promise<CheckinSummary> => {
+    checkinInflight ??= (async () => {
+      await syncPool()
+      // 暂停 / 待登录的号不发请求：用户明确关掉的东西不该在后台悄悄联网。
+      const ids = await store.dispatchIds()
+      return runCheckinPass({
+        ids,
+        resolveSession: async id => (await store.resolve(id))?.session,
+        // 会话被提前吊销时（上游回 200 + 100002）先让账号层重登一次，再签一次；
+        // `markRejected` 走的是已有的单飞重登路径，不另写一套登录。
+        refreshSession: async (id, reason) => {
+          await store.markRejected(id, reason)
+          return (await store.resolve(id))?.session
+        },
+        cachedPoints: id => points.state(id)?.snapshot,
+        points,
+        tracker: checkins,
+        log: appendRefreshLog,
+      })
+    })().finally(() => {
+      checkinInflight = undefined
+    })
+    return checkinInflight
+  }
+
+  /** 启动时那一轮签到：失败只落日志，不能影响 provider 注册与目录发现。 */
+  const runStartupCheckin = async (): Promise<void> => {
+    if (stopped) return
+    try {
+      const summary = await checkinAll()
+      ctx.logger.debug(`dsh-loomy: ${summary.message}`)
+      if (summary.failed > 0) appendRefreshLog(`check-in pass: ${summary.message}`)
+    } catch (error: unknown) {
+      ctx.logger.debug('dsh-loomy: check-in pass failed; it will be retried on the next start', error)
+      appendRefreshLog(`check-in pass failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   /** 手动/自动刷新目录。 */
   const refreshModels = async (): Promise<{ models: number; refreshed: boolean }> => {
     await syncPool()
@@ -356,6 +420,8 @@ export function apply(ctx: Context, rawConfig: Config): void {
       usage: () => usage.snapshot(),
       points: () => points.snapshot(),
       refreshPoints,
+      checkins: () => checkins.snapshot(),
+      checkinNow: checkinAll,
       dock,
       setDock,
       refreshModels,
@@ -456,13 +522,22 @@ export function apply(ctx: Context, rawConfig: Config): void {
     pointsTimer.unref?.()
   }
 
+  // ---- 启动签到 ------------------------------------------------------------
+  /**
+   * 打开 DSH 就签到：延迟 5 秒，别和目录发现、首轮点数查询撞在同一瞬间。
+   *
+   * 上游按天幂等（`alreadyProcessed`），所以一天开几次 DSH 都不会多领，也不会扣点数。
+   */
+  const CHECKIN_FIRST_DELAY_MS = 5_000
+  let checkinTimer: ReturnType<typeof setTimeout> | undefined
+
   // ---- 启动 ----------------------------------------------------------------
   void usage.load().catch(() => {})
 
   ctx.effect(() => () => {
     stopped = true
     abort.abort()
-    for (const timer of [discoveryTimer, keepAliveTimer, pointsTimer]) {
+    for (const timer of [discoveryTimer, keepAliveTimer, pointsTimer, checkinTimer]) {
       if (timer !== undefined) clearTimeout(timer)
     }
     void usage.flush().catch(() => {})
@@ -478,6 +553,10 @@ export function apply(ctx: Context, rawConfig: Config): void {
       void keepAliveLoop()
       pointsTimer = setTimeout(() => void pointsLoop(), POINTS_FIRST_DELAY_MS)
       pointsTimer.unref?.()
+      if (current().checkinOnStart !== false) {
+        checkinTimer = setTimeout(() => void runStartupCheckin(), CHECKIN_FIRST_DELAY_MS)
+        checkinTimer.unref?.()
+      }
 
       const loomy = createLoomyAdapter({
         shim,

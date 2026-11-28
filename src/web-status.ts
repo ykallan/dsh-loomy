@@ -20,6 +20,7 @@ import type { LoomyAccountStore, LoomyAccountSummary } from './accounts.ts'
 import type { AccountRuntime, PoolStrategy } from './account-pool.ts'
 import type { LoomyModelInfo } from './catalog.ts'
 import type { AccountPoints } from './points.ts'
+import type { AccountCheckin, CheckinSummary } from './checkin.ts'
 import type { UsageSnapshot } from './usage.ts'
 import type { ShimStats } from './shim.ts'
 import { LOOMY_PROVIDER } from './adapter.ts'
@@ -31,6 +32,9 @@ import {
   type SelectionMode,
 } from './catalog.ts'
 import { hostIsLoopback, originIsLoopback } from './loopback.ts'
+
+/** 把签到类型一并暴露给浏览器侧（只走类型，客户端不会拿到宿主运行时）。 */
+export type { AccountCheckin, CheckinOutcome, CheckinSummary } from './checkin.ts'
 
 // ---------------------------------------------------------------------------
 // 路由常量
@@ -46,6 +50,8 @@ export const LOOMY_LOGIN_PATH = '/api/loomy/login'
 export const LOOMY_SMS_PATH = '/api/loomy/sms'
 export const LOOMY_SESSION_PATH = '/api/loomy/session'
 export const LOOMY_POINTS_PATH = '/api/loomy/points'
+/** 手动签到：POST 一次，给每个可用账号发一遍上游 `first-login`。 */
+export const LOOMY_CHECKIN_PATH = '/api/loomy/checkin'
 export const LOOMY_REFRESH_MODELS_PATH = '/api/loomy/refresh-models'
 export const LOOMY_DOCK_PATH = '/api/loomy/dock'
 export const LOOMY_DOCTOR_PATH = '/api/loomy/doctor'
@@ -77,6 +83,8 @@ export interface LoomyWebAccount extends LoomyAccountSummary {
   slot?: Pick<AccountRuntime, 'activeConcurrent' | 'maxConcurrent' | 'coolUntil' | 'disabled' | 'lastError'>
   /** 这个号最近查到的点数。 */
   points?: AccountPoints
+  /** 这个号最近一次签到的结果（宿主启动时自动跑，也可手动触发）。 */
+  checkin?: AccountCheckin
 }
 
 /** 卡片上的一个模型。 */
@@ -151,6 +159,10 @@ export interface LoomyRouteOptions {
   usage: () => UsageSnapshot
   points: () => Record<string, AccountPoints>
   refreshPoints: () => Promise<PointsRefreshResult>
+  /** 各账号最近一次签到的结果。 */
+  checkins: () => Record<string, AccountCheckin>
+  /** 手动触发一轮签到（同一个账号按天幂等）。 */
+  checkinNow: () => Promise<CheckinSummary>
   dock: () => LoomyDockFlags
   setDock: (patch: Partial<LoomyDockFlags>) => Promise<boolean>
   refreshModels: () => Promise<{ models: number; refreshed: boolean }>
@@ -236,9 +248,11 @@ export async function buildStatus(deps: LoomyRouteOptions): Promise<LoomyWebStat
   const summaries = await deps.store.list()
   const slots = new Map(deps.pool().map(entry => [entry.id, entry]))
   const points = deps.points()
+  const checkins = deps.checkins()
   const accounts: LoomyWebAccount[] = summaries.map(summary => {
     const slot = slots.get(summary.id)
     const pointState = points[summary.id]
+    const checkin = checkins[summary.id]
     return {
       ...summary,
       ...slot === undefined ? {} : {
@@ -251,6 +265,7 @@ export async function buildStatus(deps: LoomyRouteOptions): Promise<LoomyWebStat
         },
       },
       ...pointState === undefined ? {} : { points: pointState },
+      ...checkin === undefined ? {} : { checkin },
     }
   })
   return {
@@ -604,6 +619,35 @@ function pointsHandler(deps: LoomyRouteOptions): Handler {
   }
 }
 
+/**
+ * 手动签到：给每个可用账号发一遍上游 `first-login`。
+ *
+ * 为什么要有这条路由：启动那一轮可能碰上网络抖动，用户不该为了重试去重启 DSH；
+ * 上游按天幂等，所以这里可以放心重复调用（应答 `alreadyProcessed: true`）。
+ */
+function checkinHandler(deps: LoomyRouteOptions): Handler {
+  return async (req, res) => {
+    if (!loopbackRequest(req)) {
+      json(res, 403, { error: 'request-not-trusted' })
+      return
+    }
+    if (req.method !== 'POST') {
+      json(res, 405, { error: 'method not allowed' })
+      return
+    }
+    if (!isJsonRequest(req)) {
+      json(res, 415, { error: 'content-type must be application/json' })
+      return
+    }
+    try {
+      const outcome = await deps.checkinNow()
+      json(res, 200, { outcome, status: await buildStatus(deps) })
+    } catch (error: unknown) {
+      json(res, 500, { error: safeMessage(error) })
+    }
+  }
+}
+
 function refreshModelsHandler(deps: LoomyRouteOptions): Handler {
   return async (req, res) => {
     if (!loopbackRequest(req)) {
@@ -733,6 +777,7 @@ export function registerLoomyStatusRoutes(ctx: Context, deps: LoomyRouteOptions)
       ctx.webServer.register({ kind: 'exact', path: LOOMY_SMS_PATH, handler: smsHandler(deps) }),
       ctx.webServer.register({ kind: 'exact', path: LOOMY_SESSION_PATH, handler: sessionHandler(deps) }),
       ctx.webServer.register({ kind: 'exact', path: LOOMY_POINTS_PATH, handler: pointsHandler(deps) }),
+      ctx.webServer.register({ kind: 'exact', path: LOOMY_CHECKIN_PATH, handler: checkinHandler(deps) }),
       ctx.webServer.register({ kind: 'exact', path: LOOMY_REFRESH_MODELS_PATH, handler: refreshModelsHandler(deps) }),
       ctx.webServer.register({ kind: 'exact', path: LOOMY_DOCK_PATH, handler: dockHandler(deps) }),
       ctx.webServer.register({ kind: 'exact', path: LOOMY_DOCTOR_PATH, handler: doctorHandler(deps) }),
